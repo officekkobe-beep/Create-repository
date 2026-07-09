@@ -1,0 +1,242 @@
+export type Worker = {
+  id: string;
+  name: string;
+  active: boolean;
+  createdAt: string;
+};
+
+export type ReportSource = "admin" | "worker_link";
+
+export type WorkerShareLink = {
+  workerId: string;
+  token: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type Client = {
+  id: string;
+  name: string;
+  code: string;
+  active: boolean;
+  createdAt: string;
+};
+
+export type DailyReport = {
+  id: string;
+  workDate: string;
+  workMonth: string;
+  workerId: string;
+  clientId: string;
+  manualCount: number;
+  smartImportCount: number;
+  totalSortingCount: number;
+  memo: string;
+  source: ReportSource;
+  sourceWorkerId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkUnit = "count" | "time";
+
+export type WorkType = {
+  id: "submitted-documents" | "office-work";
+  name: string;
+  unit: WorkUnit;
+  active: boolean;
+  createdAt: string;
+};
+
+export type UnitPrice = {
+  workTypeId: WorkType["id"];
+  amount: number;
+  costAmount: number;
+  quantity: number;
+  unitLabel: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SortingPriceId = "manual" | "smart";
+
+export type SortingUnitPrice = {
+  id: SortingPriceId;
+  name: string;
+  amount: number;
+  costAmount: number;
+  quantity: number;
+  unitLabel: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkerOutsourcePrice = {
+  workerId: string;
+  manualUnitPrice: number;
+  smartUnitPrice: number;
+  submittedDocumentsUnitPrice: number;
+  officeWorkUnitPrice: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PaymentStatementSettings = {
+  title: string;
+  issuerName: string;
+  issuerAddress: string;
+  issuerPhone: string;
+  issuerEmail: string;
+  registrationNumber: string;
+  paymentDueText: string;
+  bankFeeText: string;
+  notes: string;
+  footerText: string;
+  updatedAt: string;
+};
+
+export type MonthlyWorkReport = {
+  id: string;
+  workDate: string;
+  workMonth: string;
+  workerId: string;
+  workTypeId: WorkType["id"];
+  clientId: string;
+  documentCount: number;
+  workMinutes: number;
+  memo: string;
+  source: ReportSource;
+  sourceWorkerId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AppData = {
+  workers: Worker[];
+  clients: Client[];
+  reports: DailyReport[];
+  workTypes: WorkType[];
+  unitPrices: UnitPrice[];
+  sortingUnitPrices: SortingUnitPrice[];
+  workerOutsourcePrices: WorkerOutsourcePrice[];
+  workerShareLinks: WorkerShareLink[];
+  paymentStatementSettings: PaymentStatementSettings;
+  monthlyWorkReports: MonthlyWorkReport[];
+};
+
+export type ReportInput = Omit<DailyReport, "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt"> & Partial<Pick<DailyReport, "source" | "sourceWorkerId">>;
+
+export type MonthlyWorkReportInput = Omit<MonthlyWorkReport, "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt"> & Partial<Pick<MonthlyWorkReport, "source" | "sourceWorkerId">>;
+
+export type SummaryRow = {
+  key: string;
+  workerId: string;
+  workerName: string;
+  clientId: string;
+  clientName: string;
+  manualCount: number;
+  manualBillableCount: number;
+  smartImportCount: number;
+  invoiceTargetCount: number;
+  autoWorkCount: number;
+};
+
+export type ClientSummaryRow = {
+  clientId: string;
+  clientName: string;
+  manualCount: number;
+  manualFreeCount: number;
+  manualBillableCount: number;
+  manualRevenueUnitPrice: number;
+  manualRevenue: number;
+  manualCostUnitPrice: number;
+  manualCost: number;
+  smartImportCount: number;
+  smartRevenueUnitPrice: number;
+  smartRevenue: number;
+  smartCostUnitPrice: number;
+  smartCost: number;
+  invoiceTargetCount: number;
+  sortingRevenue: number;
+  sortingCost: number;
+  sortingGrossProfit: number;
+  manualOutsourceCost: number;
+  smartOutsourceCost: number;
+  sortingOutsourceCost: number;
+};
+
+export type MonthlyWorkSummaryRow = {
+  key: string;
+  clientId: string;
+  clientName: string;
+  workTypeId: WorkType["id"];
+  workTypeName: string;
+  unit: WorkUnit;
+  documentCount: number;
+  workMinutes: number;
+  revenueUnitPrice: number;
+  costUnitPrice: number;
+  unitQuantity: number;
+  unitLabel: string;
+  revenue: number;
+  cost: number;
+  grossProfit: number;
+  outsourceCost: number;
+};
+
+export type ClientBillingRow = {
+  clientId: string;
+  clientName: string;
+  rows: MonthlyWorkSummaryRow[];
+  totalRevenue: number;
+  totalCost: number;
+  totalOutsourceCost: number;
+  grossProfit: number;
+};
+
+export type OutsourceDetailRow = {
+  id: string;
+  workerId: string;
+  workerName: string;
+  workDate: string;
+  clientName: string;
+  workKind: "手入力" | "スマート取込" | "提出書類" | "その他事務業務";
+  quantity: number;
+  quantityLabel: string;
+  unitPrice: number;
+  amount: number;
+  memo: string;
+};
+
+export type WorkerOutsourceSummaryRow = {
+  workerId: string;
+  workerName: string;
+  manualCount: number;
+  manualAmount: number;
+  smartImportCount: number;
+  smartImportAmount: number;
+  submittedDocumentsCount: number;
+  submittedDocumentsAmount: number;
+  officeWorkMinutes: number;
+  officeWorkAmount: number;
+  totalAmount: number;
+  details: OutsourceDetailRow[];
+};
+
+export type ClientProfitabilityRow = {
+  clientId: string;
+  clientName: string;
+  sortingRevenue: number;
+  submittedDocumentsRevenue: number;
+  officeWorkRevenue: number;
+  totalRevenue: number;
+  manualOutsourceCost: number;
+  smartOutsourceCost: number;
+  submittedDocumentsOutsourceCost: number;
+  officeWorkOutsourceCost: number;
+  totalOutsourceCost: number;
+  grossProfit: number;
+  grossProfitRate: number;
+  sortingDetail?: ClientSummaryRow;
+};
