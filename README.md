@@ -446,3 +446,49 @@ npm.cmd run build
 ### 注意点
 
 外注者用共有リンクにはパスコードやログインを付けていません。信用できる外注先にだけ共有し、使わなくなったリンクは「担当者設定」から無効化してください。
+
+### GitHub反映後のVercel確認
+
+GitHubへpushすると、Vercel連携済みのプロジェクトでは自動デプロイが開始されます。
+
+1. GitHubのリポジトリを開き、`README.md` と `TEST_REPORT.md` が反映されていることを確認します。
+2. Vercelの対象プロジェクトを開きます。
+3. Deploymentsで最新のデプロイが `Building` から `Ready` になるまで待ちます。
+4. `Ready` になったら公開URLを開きます。
+5. 画面上部の保存先が `Supabase` になっていることを確認します。
+6. `TEST_REPORT.md` のチェック項目に沿って、管理者入力、外注者リンク入力、PDF、CSVを確認します。
+
+公開URL:
+
+```text
+https://create-repository.vercel.app
+```
+
+もしVercelのデプロイが失敗した場合は、VercelのBuild Logsを開き、`NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` がProduction環境に設定されているか確認してください。
+
+## 公開版の動作確認
+
+Vercel公開版とSupabase保存版の確認には、`TEST_REPORT.md` を使ってください。
+
+確認対象URL:
+
+```text
+https://create-repository.vercel.app
+```
+
+`TEST_REPORT.md` には以下の確認項目をまとめています。
+
+- 公開URLでアプリが開くか
+- 保存先がSupabaseになっているか
+- 管理者画面から仕訳作業を登録できるか
+- 更新後もデータが残るか
+- 月次集計、外注費支払に反映されるか
+- 外注者用共有リンクを取得できるか
+- `/worker/[token]` で外注者用画面が開くか
+- 外注者用画面に管理メニューが表示されないか
+- 外注者リンク入力分が作業一覧に表示されるか
+- 支払明細PDFとCSVを出力できるか
+- 初回入力時、前回総仕訳数を0件として計算するか
+- 前回総仕訳数がある場合の手入力件数と外注費が期待値どおりか
+
+PlaywrightなどのE2Eテストは未導入です。追加する場合は、別途Playwrightの依存関係をインストールしてから設定してください。
