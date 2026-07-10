@@ -210,10 +210,7 @@ insert into work_types (id, name, unit)
 values
   ('submitted-documents', '提出書類', 'count'),
   ('office-work', 'その他事務業務', 'time')
-on conflict (id) do update
-set name = excluded.name,
-    unit = excluded.unit,
-    active = true;
+on conflict (id) do nothing;
 
 insert into unit_prices (work_type_id, amount, quantity, unit_label)
 values

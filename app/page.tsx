@@ -26,6 +26,17 @@ import {
   downloadSortingDailyReportCsv
 } from "@/lib/csv";
 import {
+  downloadBackupJson,
+  downloadClientSummaryBackupCsv,
+  downloadMonthlyWorkReportsBackupCsv,
+  downloadOutsourceDetailsBackupCsv,
+  downloadSortingReportsBackupCsv,
+  readRecentLocalBackups,
+  saveRecentLocalBackup,
+  type BackupKind,
+  type RecentLocalBackup
+} from "@/lib/backup";
+import {
   deleteClient,
   deleteMonthlyWorkReport,
   deleteReport,
@@ -71,7 +82,22 @@ import type {
 type MainTab = "input" | "summary" | "outsource" | "more";
 type MoreTab = "home" | "list" | "billing" | "settings";
 type WorkKind = "sorting" | "submitted-documents" | "office-work";
-type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement";
+type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement" | "backup";
+
+type BackupPreview = {
+  fileName: string;
+  backupCreatedAt: string;
+  backupSchemaVersion: string;
+  backupType: string;
+  sortingReports: number;
+  monthlyWorkReports: number;
+  clients: number;
+  workers: number;
+  unitPrices: number;
+  workerOutsourcePrices: number;
+  workerShareLinks: number;
+  hasPaymentStatementSettings: boolean;
+};
 
 const emptySettings: PaymentStatementSettings = {
   title: "支払明細書",
@@ -128,6 +154,10 @@ function blankMonthly(data: AppData, kind: WorkKind): MonthlyWorkReportInput {
   };
 }
 
+function latestByUpdatedAt<T extends { updatedAt: string }>(items: T[]) {
+  return items.slice().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+}
+
 function safeText(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char] ?? char));
 }
@@ -156,6 +186,8 @@ export default function Home() {
   const [outsourcePriceForms, setOutsourcePriceForms] = useState<Record<string, WorkerOutsourcePrice>>({});
   const [paymentSettingsForm, setPaymentSettingsForm] = useState<PaymentStatementSettings>(emptySettings);
   const [selectedOutsourceWorkerId, setSelectedOutsourceWorkerId] = useState("");
+  const [recentLocalBackups, setRecentLocalBackups] = useState<RecentLocalBackup[]>([]);
+  const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -169,6 +201,7 @@ export default function Home() {
       setSortingPriceForms(Object.fromEntries(result.data.sortingUnitPrices.map((price) => [price.id, price])));
       setOutsourcePriceForms(Object.fromEntries(result.data.workerOutsourcePrices.map((price) => [price.workerId, price])));
       setPaymentSettingsForm(result.data.paymentStatementSettings);
+      setRecentLocalBackups(readRecentLocalBackups());
     });
   }, []);
 
@@ -226,6 +259,49 @@ export default function Home() {
     notify("CSVを出力しました。");
   }
 
+  function exportBackup(kind: BackupKind) {
+    downloadBackupJson(kind, data);
+    notify("バックアップJSONを出力しました。");
+  }
+
+  function exportBackupCsv(action: () => void) {
+    action();
+    notify("CSVバックアップを出力しました。");
+  }
+
+  function refreshRecentBackups(nextData: AppData, savedWork?: DailyReport | MonthlyWorkReport) {
+    setRecentLocalBackups(saveRecentLocalBackup(nextData, savedWork));
+  }
+
+  async function previewBackupFile(file?: File) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const workLogs = (parsed.work_logs ?? {}) as Record<string, unknown>;
+      const sortingReports = (parsed.sorting_reports ?? workLogs.sorting_reports ?? []) as unknown[];
+      const monthlyWorkReports = (parsed.monthly_work_reports ?? workLogs.monthly_work_reports ?? []) as unknown[];
+      setBackupPreview({
+        fileName: file.name,
+        backupCreatedAt: String(parsed.backup_created_at ?? ""),
+        backupSchemaVersion: String(parsed.backup_schema_version ?? ""),
+        backupType: String(parsed.backup_type ?? ""),
+        sortingReports: Array.isArray(sortingReports) ? sortingReports.length : 0,
+        monthlyWorkReports: Array.isArray(monthlyWorkReports) ? monthlyWorkReports.length : 0,
+        clients: Array.isArray(parsed.clients) ? parsed.clients.length : 0,
+        workers: Array.isArray(parsed.workers) ? parsed.workers.length : 0,
+        unitPrices: Array.isArray(parsed.unit_prices) ? parsed.unit_prices.length : 0,
+        workerOutsourcePrices: Array.isArray(parsed.worker_outsource_prices) ? parsed.worker_outsource_prices.length : 0,
+        workerShareLinks: Array.isArray(parsed.worker_share_links) ? parsed.worker_share_links.length : 0,
+        hasPaymentStatementSettings: Boolean(parsed.payment_statement_settings)
+      });
+      notify("バックアップ内容を確認しました。");
+    } catch {
+      setBackupPreview(null);
+      notify("バックアップJSONを読み込めませんでした。");
+    }
+  }
+
   function switchWorkKind(kind: WorkKind) {
     setWorkKind(kind);
     if (kind === "sorting") {
@@ -267,6 +343,7 @@ export default function Home() {
     if (countError) return notify(countError);
     const next = await upsertReport({ ...sortingForm, id: editingSorting?.id }, data);
     setData(next);
+    refreshRecentBackups(next, editingSorting ? next.reports.find((report) => report.id === editingSorting.id) : latestByUpdatedAt(next.reports));
     setEditingSorting(null);
     setSortingForm(blankSorting(next));
     setSortingCountState(emptySortingCountState());
@@ -290,6 +367,7 @@ export default function Home() {
       data
     );
     setData(next);
+    refreshRecentBackups(next, editingMonthly ? next.monthlyWorkReports.find((report) => report.id === editingMonthly.id) : latestByUpdatedAt(next.monthlyWorkReports));
     setEditingMonthly(null);
     setMonthlyForm(blankMonthly(next, kind));
     notify("月次作業を保存しました。");
@@ -582,6 +660,12 @@ export default function Home() {
                 paymentSettingsForm={paymentSettingsForm}
                 setPaymentSettingsForm={setPaymentSettingsForm}
                 submitPaymentSettings={submitPaymentSettings}
+                month={month}
+                recentLocalBackups={recentLocalBackups}
+                backupPreview={backupPreview}
+                exportBackup={exportBackup}
+                exportBackupCsv={exportBackupCsv}
+                previewBackupFile={previewBackupFile}
               />
             ) : null}
           </section>
@@ -757,8 +841,134 @@ function SettingsPanel(props: {
   paymentSettingsForm: PaymentStatementSettings;
   setPaymentSettingsForm: (form: PaymentStatementSettings) => void;
   submitPaymentSettings: (event: FormEvent) => void;
+  month: string;
+  recentLocalBackups: RecentLocalBackup[];
+  backupPreview: BackupPreview | null;
+  exportBackup: (kind: BackupKind) => void;
+  exportBackupCsv: (action: () => void) => void;
+  previewBackupFile: (file?: File) => void;
 }) {
-  return <section className="space-y-6"><div className="panel p-4"><div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5"><ChoiceButton active={props.settingsTab === "clients"} onClick={() => props.setSettingsTab("clients")} label="顧問先設定" /><ChoiceButton active={props.settingsTab === "workers"} onClick={() => props.setSettingsTab("workers")} label="担当者設定" /><ChoiceButton active={props.settingsTab === "workTypes"} onClick={() => props.setSettingsTab("workTypes")} label="作業種別設定" /><ChoiceButton active={props.settingsTab === "prices"} onClick={() => props.setSettingsTab("prices")} label="単価設定" /><ChoiceButton active={props.settingsTab === "paymentStatement"} onClick={() => props.setSettingsTab("paymentStatement")} label="支払明細書設定" /></div></div>{props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} remove={props.removeClient} /> : null}{props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} remove={props.removeWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}{props.settingsTab === "workTypes" ? <WorkTypeSettings workTypes={props.data.workTypes} /> : null}{props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} /> : null}{props.settingsTab === "paymentStatement" ? <PaymentStatementSettingsPanel form={props.paymentSettingsForm} setForm={props.setPaymentSettingsForm} submit={props.submitPaymentSettings} /> : null}</section>;
+  return (
+    <section className="space-y-6">
+      <div className="panel p-4">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+          <ChoiceButton active={props.settingsTab === "clients"} onClick={() => props.setSettingsTab("clients")} label="顧問先設定" />
+          <ChoiceButton active={props.settingsTab === "workers"} onClick={() => props.setSettingsTab("workers")} label="担当者設定" />
+          <ChoiceButton active={props.settingsTab === "workTypes"} onClick={() => props.setSettingsTab("workTypes")} label="作業種別設定" />
+          <ChoiceButton active={props.settingsTab === "prices"} onClick={() => props.setSettingsTab("prices")} label="単価設定" />
+          <ChoiceButton active={props.settingsTab === "paymentStatement"} onClick={() => props.setSettingsTab("paymentStatement")} label="支払明細書設定" />
+          <ChoiceButton active={props.settingsTab === "backup"} onClick={() => props.setSettingsTab("backup")} label="バックアップ管理" />
+        </div>
+      </div>
+      {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} remove={props.removeClient} /> : null}
+      {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} remove={props.removeWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}
+      {props.settingsTab === "workTypes" ? <WorkTypeSettings workTypes={props.data.workTypes} /> : null}
+      {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} /> : null}
+      {props.settingsTab === "paymentStatement" ? <PaymentStatementSettingsPanel form={props.paymentSettingsForm} setForm={props.setPaymentSettingsForm} submit={props.submitPaymentSettings} /> : null}
+      {props.settingsTab === "backup" ? (
+        <BackupSettingsPanel
+          data={props.data}
+          month={props.month}
+          recentLocalBackups={props.recentLocalBackups}
+          backupPreview={props.backupPreview}
+          exportBackup={props.exportBackup}
+          exportBackupCsv={props.exportBackupCsv}
+          previewBackupFile={props.previewBackupFile}
+        />
+      ) : null}
+    </section>
+  );
+}
+
+function BackupSettingsPanel({
+  data,
+  month,
+  recentLocalBackups,
+  backupPreview,
+  exportBackup,
+  exportBackupCsv,
+  previewBackupFile
+}: {
+  data: AppData;
+  month: string;
+  recentLocalBackups: RecentLocalBackup[];
+  backupPreview: BackupPreview | null;
+  exportBackup: (kind: BackupKind) => void;
+  exportBackupCsv: (action: () => void) => void;
+  previewBackupFile: (file?: File) => void;
+}) {
+  return (
+    <section className="space-y-6">
+      <section className="panel overflow-hidden">
+        <PanelTitle title="バックアップ管理" description="デプロイ前や設定変更前に、現在のデータをJSONまたはCSVで保存できます。復元は自動実行しません。" />
+        <div className="space-y-5 p-5">
+          <div>
+            <h3 className="font-bold">JSONバックアップ</h3>
+            <p className="mt-1 text-sm text-slate-500">作業履歴、担当者、顧問先、単価、共有リンク、支払明細書設定を用途別に保存します。</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="button-primary" type="button" onClick={() => exportBackup("all")}>全データをバックアップ</button>
+              <button className="button-secondary" type="button" onClick={() => exportBackup("work_logs")}>作業履歴だけバックアップ</button>
+              <button className="button-secondary" type="button" onClick={() => exportBackup("settings")}>設定だけバックアップ</button>
+            </div>
+          </div>
+          <div>
+            <h3 className="font-bold">CSVバックアップ（対象月: {month}）</h3>
+            <p className="mt-1 text-sm text-slate-500">Excelで確認しやすいBOM付きUTF-8 CSVを出力します。</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button className="button-secondary" type="button" onClick={() => exportBackupCsv(() => downloadSortingReportsBackupCsv(data, month))}>仕訳日報CSVバックアップ</button>
+              <button className="button-secondary" type="button" onClick={() => exportBackupCsv(() => downloadMonthlyWorkReportsBackupCsv(data, month))}>月次作業日報CSVバックアップ</button>
+              <button className="button-secondary" type="button" onClick={() => exportBackupCsv(() => downloadOutsourceDetailsBackupCsv(data, month))}>外注費支払明細CSVバックアップ</button>
+              <button className="button-secondary" type="button" onClick={() => exportBackupCsv(() => downloadClientSummaryBackupCsv(data, month))}>顧問先別集計CSVバックアップ</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <PanelTitle title="バックアップ内容確認" description="バックアップJSONを選択して、中身の件数だけ確認できます。ここでは復元や上書きは行いません。" />
+        <div className="space-y-4 p-5">
+          <input className="field" type="file" accept="application/json,.json" onChange={(event) => previewBackupFile(event.target.files?.[0])} />
+          {backupPreview ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <Info label="ファイル名" value={backupPreview.fileName} />
+              <Info label="作成日時" value={backupPreview.backupCreatedAt || "未設定"} />
+              <Info label="種別" value={backupPreview.backupType || "未設定"} />
+              <Info label="スキーマ" value={backupPreview.backupSchemaVersion || "未設定"} />
+              <Info label="仕訳日報" value={`${formatNumber(backupPreview.sortingReports)}件`} />
+              <Info label="月次作業日報" value={`${formatNumber(backupPreview.monthlyWorkReports)}件`} />
+              <Info label="顧問先" value={`${formatNumber(backupPreview.clients)}件`} />
+              <Info label="担当者" value={`${formatNumber(backupPreview.workers)}件`} />
+              <Info label="単価設定" value={`${formatNumber(backupPreview.unitPrices)}件`} />
+              <Info label="担当者別外注単価" value={`${formatNumber(backupPreview.workerOutsourcePrices)}件`} />
+              <Info label="共有リンク" value={`${formatNumber(backupPreview.workerShareLinks)}件`} />
+              <Info label="支払明細書設定" value={backupPreview.hasPaymentStatementSettings ? "あり" : "なし"} />
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">まだバックアップJSONは選択されていません。</p>
+          )}
+        </div>
+      </section>
+
+      <section className="panel overflow-hidden">
+        <PanelTitle title="ブラウザ内の直近バックアップ" description="作業入力を保存したタイミングで、このブラウザのlocalStorageに直近5世代まで控えを残します。" />
+        <div className="p-5">
+          {recentLocalBackups.length ? (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {recentLocalBackups.map((backup, index) => (
+                <Info
+                  key={`${backup.backup_created_at}-${index}`}
+                  label={`${index + 1}世代前`}
+                  value={`${new Date(backup.backup_created_at).toLocaleString("ja-JP")} / 担当者${formatNumber(backup.workers.length)}件 / 顧問先${formatNumber(backup.clients.length)}件`}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">このブラウザ内の直近バックアップはまだありません。作業入力を保存すると自動で作成されます。</p>
+          )}
+        </div>
+      </section>
+    </section>
+  );
 }
 
 function ClientSettings({ data, form, setForm, submit, remove }: { data: AppData; form: Partial<Client> & Pick<Client, "name">; setForm: (form: Partial<Client> & Pick<Client, "name">) => void; submit: (event: FormEvent) => void; remove: (id: string) => void }) {
