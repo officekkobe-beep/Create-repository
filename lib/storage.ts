@@ -25,6 +25,28 @@ function nextCode(prefix: string, existingCodes: string[]) {
   return `${prefix}${String(max + 1).padStart(3, "0")}`;
 }
 
+function makeUniqueCodes<T extends { id: string; code: string }>(items: T[], prefix: string) {
+  const used = new Set<string>();
+  return items.map((item) => {
+    const current = item.code?.trim();
+    if (current && !used.has(current)) {
+      used.add(current);
+      return { ...item, code: current };
+    }
+    const code = nextCode(prefix, Array.from(used));
+    used.add(code);
+    return { ...item, code };
+  });
+}
+
+function assertUniqueCode<T extends { id: string; code: string }>(items: T[], id: string, code: string, label: string) {
+  const normalized = code.trim();
+  if (!normalized) throw new Error(`${label}コードを入力してください。`);
+  if (items.some((item) => item.id !== id && item.code.trim() === normalized)) {
+    throw new Error(`${label}コードが重複しています。別のコードを入力してください。`);
+  }
+}
+
 function supabaseClient(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -48,8 +70,8 @@ function emptyAppData(): AppData {
 }
 
 function normalizeData(data: Partial<AppData>): AppData {
-  const workers = (data.workers ?? []).map((worker, index) => ({ ...worker, code: worker.code || `W${String(index + 1).padStart(3, "0")}` }));
-  const workTypes = (data.workTypes ?? []).map((workType, index) => ({ ...workType, code: workType.code || `T${String(index + 1).padStart(3, "0")}` }));
+  const workers = makeUniqueCodes((data.workers ?? []).map((worker) => ({ ...worker, code: worker.code || "" })), "W");
+  const workTypes = makeUniqueCodes((data.workTypes ?? []).map((workType) => ({ ...workType, code: workType.code || "" })), "T");
   return {
     workers,
     clients: data.clients ?? [],
@@ -182,7 +204,7 @@ export async function createSampleData(current: AppData) {
     const missingMonthlyReports = sampleData.monthlyWorkReports.filter((sample) => !current.monthlyWorkReports.some((item) => item.id === sample.id));
 
     if (missingWorkers.length) await supabase.from("workers").upsert(missingWorkers.map((worker) => ({ id: worker.id, worker_code: worker.code, name: worker.name, active: true, is_active: true, created_at: worker.createdAt })));
-    if (missingClients.length) await supabase.from("clients").upsert(missingClients.map((client) => ({ id: client.id, name: client.name, code: client.code, active: true, created_at: client.createdAt })));
+    if (missingClients.length) await supabase.from("clients").upsert(missingClients.map((client) => ({ id: client.id, name: client.name, code: client.code, active: true, is_active: true, created_at: client.createdAt })));
     if (missingWorkTypes.length) await supabase.from("work_types").upsert(missingWorkTypes.map((workType) => ({ id: workType.id, work_type_code: workType.code, name: workType.name, unit: workType.unit, unit_type: workType.unit, active: workType.active, is_active: workType.active, created_at: workType.createdAt })));
     if (missingUnitPrices.length) await supabase.from("unit_prices").upsert(
       missingUnitPrices.map((price) => ({
@@ -267,7 +289,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
         id: row.id,
         name: row.name,
         code: row.code,
-        active: row.active,
+        active: row.is_active ?? row.active ?? true,
         createdAt: row.created_at
       })),
       reports: (reportsResult.data ?? []).map(toReport),
@@ -337,9 +359,12 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
 
 export async function upsertWorker(worker: Partial<Worker> & Pick<Worker, "name">, current: AppData) {
   const supabase = supabaseClient();
+  const id = worker.id ?? createId("worker");
+  const code = worker.code?.trim() || nextCode("W", current.workers.map((item) => item.code));
+  assertUniqueCode(current.workers, id, code, "担当者");
   const record: Worker = {
-    id: worker.id ?? createId("worker"),
-    code: worker.code?.trim() || nextCode("W", current.workers.map((item) => item.code)),
+    id,
+    code,
     name: worker.name.trim(),
     active: worker.active ?? true,
     createdAt: worker.createdAt ?? nowIso()
@@ -390,6 +415,26 @@ export async function deleteWorker(id: string, current: AppData) {
   return next;
 }
 
+export async function deleteWorkerPermanently(id: string, current: AppData) {
+  const usedInReports = current.reports.some((report) => report.workerId === id) || current.monthlyWorkReports.some((report) => report.workerId === id);
+  const usedInLinks = current.workerShareLinks.some((link) => link.workerId === id);
+  if (usedInReports || usedInLinks) {
+    throw new Error("この担当者は過去の作業履歴または共有リンクで使用されているため削除できません。無効化してください。");
+  }
+  const supabase = supabaseClient();
+  const next = {
+    ...current,
+    workers: current.workers.filter((item) => item.id !== id),
+    workerOutsourcePrices: current.workerOutsourcePrices.filter((item) => item.workerId !== id)
+  };
+  if (supabase) {
+    await supabase.from("worker_outsource_prices").delete().eq("worker_id", id);
+    await supabase.from("workers").delete().eq("id", id);
+  }
+  saveLocal(next);
+  return next;
+}
+
 export async function issueWorkerShareLink(workerId: string, current: AppData) {
   const supabase = supabaseClient();
   const existing = current.workerShareLinks.find((item) => item.workerId === workerId);
@@ -435,15 +480,18 @@ export async function toggleWorkerShareLink(workerId: string, active: boolean, c
 
 export async function upsertClient(client: Partial<Client> & Pick<Client, "name">, current: AppData) {
   const supabase = supabaseClient();
+  const id = client.id ?? createId("client");
+  const code = client.code?.trim() ?? "";
+  assertUniqueCode(current.clients, id, code, "顧問先");
   const record: Client = {
-    id: client.id ?? createId("client"),
+    id,
     name: client.name.trim(),
-    code: client.code?.trim() ?? "",
+    code,
     active: client.active ?? true,
     createdAt: client.createdAt ?? nowIso()
   };
   const next = { ...current, clients: [...current.clients.filter((item) => item.id !== record.id), record] };
-  if (supabase) await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, created_at: record.createdAt });
+  if (supabase) await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, created_at: record.createdAt });
   saveLocal(next);
   return next;
 }
@@ -456,13 +504,25 @@ export async function deleteClient(id: string, current: AppData) {
   return next;
 }
 
+export async function deleteClientPermanently(id: string, current: AppData) {
+  const used = current.reports.some((report) => report.clientId === id) || current.monthlyWorkReports.some((report) => report.clientId === id);
+  if (used) throw new Error("この顧問先は過去の作業履歴で使用されているため削除できません。無効化してください。");
+  const supabase = supabaseClient();
+  const next = { ...current, clients: current.clients.filter((item) => item.id !== id) };
+  if (supabase) await supabase.from("clients").delete().eq("id", id);
+  saveLocal(next);
+  return next;
+}
+
 export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>, current: AppData) {
   const supabase = supabaseClient();
   const existing = workType.id ? current.workTypes.find((item) => item.id === workType.id) : undefined;
   const id = workType.id ?? createId("work-type");
+  const code = workType.code?.trim() || existing?.code || nextCode("T", current.workTypes.map((item) => item.code));
+  assertUniqueCode(current.workTypes, id, code, "作業種別");
   const record: WorkType = {
     id,
-    code: workType.code?.trim() || existing?.code || nextCode("T", current.workTypes.map((item) => item.code)),
+    code,
     name: workType.name.trim(),
     unit: workType.unit,
     active: workType.active ?? existing?.active ?? true,
@@ -508,6 +568,31 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
       created_at: priceRecord.createdAt,
       updated_at: priceRecord.updatedAt
     });
+  }
+  saveLocal(next);
+  return next;
+}
+
+export async function deleteWorkType(id: string, current: AppData) {
+  const supabase = supabaseClient();
+  const next = { ...current, workTypes: current.workTypes.map((item) => (item.id === id ? { ...item, active: false } : item)) };
+  if (supabase) await supabase.from("work_types").update({ active: false, is_active: false }).eq("id", id);
+  saveLocal(next);
+  return next;
+}
+
+export async function deleteWorkTypePermanently(id: string, current: AppData) {
+  const used = current.monthlyWorkReports.some((report) => report.workTypeId === id);
+  if (used) throw new Error("この作業種別は過去の作業履歴で使用されているため削除できません。無効化してください。");
+  const supabase = supabaseClient();
+  const next = {
+    ...current,
+    workTypes: current.workTypes.filter((item) => item.id !== id),
+    unitPrices: current.unitPrices.filter((item) => item.workTypeId !== id)
+  };
+  if (supabase) {
+    await supabase.from("unit_prices").delete().eq("work_type_id", id);
+    await supabase.from("work_types").delete().eq("id", id);
   }
   saveLocal(next);
   return next;

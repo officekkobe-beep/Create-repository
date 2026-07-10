@@ -14,6 +14,7 @@ create table if not exists clients (
   name text not null,
   code text not null default '',
   active boolean not null default true,
+  is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
 
@@ -73,6 +74,7 @@ alter table unit_prices add column if not exists outsource_unit_price integer no
 alter table sorting_unit_prices add column if not exists cost_amount integer not null default 0 check (cost_amount >= 0);
 alter table workers add column if not exists worker_code text not null default '';
 alter table workers add column if not exists is_active boolean not null default true;
+alter table clients add column if not exists is_active boolean not null default true;
 alter table work_types add column if not exists work_type_code text not null default '';
 alter table work_types add column if not exists unit_type text not null default 'count' check (unit_type in ('count', 'time'));
 alter table work_types add column if not exists is_active boolean not null default true;
@@ -141,6 +143,82 @@ create index if not exists monthly_work_reports_work_month_idx on monthly_work_r
 create index if not exists monthly_work_reports_client_month_idx on monthly_work_reports(client_id, work_month);
 create index if not exists monthly_work_reports_type_month_idx on monthly_work_reports(work_type_id, work_month);
 create index if not exists worker_share_links_token_idx on worker_share_links(token);
+
+do $$
+declare
+  base_no integer;
+begin
+  select coalesce(max((substring(worker_code from 2))::integer), 0)
+    into base_no
+    from workers
+    where worker_code ~ '^W[0-9]+$';
+
+  with numbered as (
+    select id, worker_code, created_at, row_number() over (partition by nullif(worker_code, '') order by created_at, id) as code_rank
+    from workers
+  ),
+  targets as (
+    select id, row_number() over (order by created_at, id) as seq
+    from numbered
+    where worker_code = '' or code_rank > 1
+  )
+  update workers
+  set worker_code = 'W' || lpad((base_no + targets.seq)::text, 3, '0')
+  from targets
+  where workers.id = targets.id;
+end $$;
+
+do $$
+declare
+  base_no integer;
+begin
+  select coalesce(max((substring(code from 2))::integer), 0)
+    into base_no
+    from clients
+    where code ~ '^C[0-9]+$';
+
+  with numbered as (
+    select id, code, created_at, row_number() over (partition by nullif(code, '') order by created_at, id) as code_rank
+    from clients
+  ),
+  targets as (
+    select id, row_number() over (order by created_at, id) as seq
+    from numbered
+    where code = '' or code_rank > 1
+  )
+  update clients
+  set code = 'C' || lpad((base_no + targets.seq)::text, 3, '0')
+  from targets
+  where clients.id = targets.id;
+end $$;
+
+do $$
+declare
+  base_no integer;
+begin
+  select coalesce(max((substring(work_type_code from 2))::integer), 0)
+    into base_no
+    from work_types
+    where work_type_code ~ '^T[0-9]+$';
+
+  with numbered as (
+    select id, work_type_code, created_at, row_number() over (partition by nullif(work_type_code, '') order by created_at, id) as code_rank
+    from work_types
+  ),
+  targets as (
+    select id, row_number() over (order by created_at, id) as seq
+    from numbered
+    where work_type_code = '' or code_rank > 1
+  )
+  update work_types
+  set work_type_code = 'T' || lpad((base_no + targets.seq)::text, 3, '0')
+  from targets
+  where work_types.id = targets.id;
+end $$;
+
+create unique index if not exists workers_worker_code_unique_idx on workers(worker_code);
+create unique index if not exists clients_code_unique_idx on clients(code);
+create unique index if not exists work_types_work_type_code_unique_idx on work_types(work_type_code);
 
 alter table workers enable row level security;
 alter table clients enable row level security;

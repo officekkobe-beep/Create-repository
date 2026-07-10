@@ -39,9 +39,13 @@ import {
 import {
   createSampleData,
   deleteClient,
+  deleteClientPermanently,
   deleteMonthlyWorkReport,
   deleteReport,
   deleteWorker,
+  deleteWorkerPermanently,
+  deleteWorkType,
+  deleteWorkTypePermanently,
   fetchData,
   issueWorkerShareLink,
   toggleWorkerShareLink,
@@ -101,6 +105,20 @@ type BackupPreview = {
   workerShareLinks: number;
   hasPaymentStatementSettings: boolean;
 };
+
+function nextMasterCode(prefix: string, codes: string[]) {
+  const used = new Set(codes.map((code) => code.trim()).filter(Boolean));
+  let index = 1;
+  while (true) {
+    const code = `${prefix}${String(index).padStart(3, "0")}`;
+    if (!used.has(code)) return code;
+    index += 1;
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "処理に失敗しました。";
+}
 
 const emptySettings: PaymentStatementSettings = {
   title: "支払明細書",
@@ -207,6 +225,7 @@ export default function Home() {
       setOutsourcePriceForms(Object.fromEntries(result.data.workerOutsourcePrices.map((price) => [price.workerId, price])));
       setPaymentSettingsForm(result.data.paymentStatementSettings);
       setRecentLocalBackups(readRecentLocalBackups());
+      setWorkerForm({ name: "", code: nextMasterCode("W", result.data.workers.map((worker) => worker.code)), active: true });
     });
   }, []);
 
@@ -399,12 +418,17 @@ export default function Home() {
 
   async function submitWorker(event: FormEvent) {
     event.preventDefault();
+    if (!workerForm.code?.trim()) return notify("担当者コードを入力してください。");
     if (!workerForm.name.trim()) return notify("担当者名を入力してください。");
-    const next = await upsertWorker(workerForm, data);
-    setData(next);
-    setOutsourcePriceForms(Object.fromEntries(next.workerOutsourcePrices.map((price) => [price.workerId, price])));
-    setWorkerForm({ name: "", code: "", active: true });
-    notify("担当者を保存しました。");
+    try {
+      const next = await upsertWorker(workerForm, data);
+      setData(next);
+      setOutsourcePriceForms(Object.fromEntries(next.workerOutsourcePrices.map((price) => [price.workerId, price])));
+      setWorkerForm({ name: "", code: nextMasterCode("W", next.workers.map((worker) => worker.code)), active: true });
+      notify("担当者を保存しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
   }
 
   async function issueShareLink(workerId: string) {
@@ -427,10 +451,66 @@ export default function Home() {
 
   async function submitClient(event: FormEvent) {
     event.preventDefault();
+    if (!clientForm.code?.trim()) return notify("顧問先コードを入力してください。");
     if (!clientForm.name.trim()) return notify("顧問先名を入力してください。");
-    setData(await upsertClient(clientForm, data));
-    setClientForm({ name: "", code: "" });
-    notify("顧問先を保存しました。");
+    try {
+      const next = await upsertClient(clientForm, data);
+      setData(next);
+      setClientForm({ name: "", code: "" });
+      notify("顧問先を保存しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function deactivateClient(id: string) {
+    const next = await deleteClient(id, data);
+    setData(next);
+    notify("顧問先を無効化しました。");
+  }
+
+  async function removeClientPermanently(id: string) {
+    try {
+      const next = await deleteClientPermanently(id, data);
+      setData(next);
+      notify("顧問先を削除しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function deactivateWorker(id: string) {
+    const next = await deleteWorker(id, data);
+    setData(next);
+    notify("担当者を無効化しました。");
+  }
+
+  async function removeWorkerPermanently(id: string) {
+    try {
+      const next = await deleteWorkerPermanently(id, data);
+      setData(next);
+      setOutsourcePriceForms(Object.fromEntries(next.workerOutsourcePrices.map((price) => [price.workerId, price])));
+      notify("担当者を削除しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function deactivateWorkType(id: string) {
+    const next = await deleteWorkType(id, data);
+    setData(next);
+    notify("作業種別を無効化しました。");
+  }
+
+  async function removeWorkTypePermanently(id: string) {
+    try {
+      const next = await deleteWorkTypePermanently(id, data);
+      setData(next);
+      setPriceForms(Object.fromEntries(next.unitPrices.map((item) => [item.workTypeId, item])));
+      notify("作業種別を削除しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
   }
 
   async function submitPrice(event: FormEvent, price: UnitPrice) {
@@ -458,10 +538,14 @@ export default function Home() {
   }
 
   async function submitWorkType(workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>) {
-    const next = await upsertWorkTypeWithPrice(workType, price, data);
-    setData(next);
-    setPriceForms(Object.fromEntries(next.unitPrices.map((item) => [item.workTypeId, item])));
-    notify("作業種別を保存しました。");
+    try {
+      const next = await upsertWorkTypeWithPrice(workType, price, data);
+      setData(next);
+      setPriceForms(Object.fromEntries(next.unitPrices.map((item) => [item.workTypeId, item])));
+      notify("作業種別を保存しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
   }
 
   async function submitPaymentSettings(event: FormEvent) {
@@ -681,11 +765,13 @@ export default function Home() {
                 clientForm={clientForm}
                 setClientForm={setClientForm}
                 submitClient={submitClient}
-                removeClient={(id) => deleteClient(id, data).then(setData)}
+                deactivateClient={deactivateClient}
+                deleteClient={removeClientPermanently}
                 workerForm={workerForm}
                 setWorkerForm={setWorkerForm}
                 submitWorker={submitWorker}
-                removeWorker={(id) => deleteWorker(id, data).then(setData)}
+                deactivateWorker={deactivateWorker}
+                deleteWorker={removeWorkerPermanently}
                 issueShareLink={issueShareLink}
                 toggleShareLink={toggleShareLink}
                 copyShareLink={copyShareLink}
@@ -699,10 +785,11 @@ export default function Home() {
                 submitSortingPrice={submitSortingPrice}
                 submitOutsourcePrice={submitOutsourcePrice}
                 submitWorkType={submitWorkType}
+                deactivateWorkType={deactivateWorkType}
+                deleteWorkType={removeWorkTypePermanently}
                 paymentSettingsForm={paymentSettingsForm}
                 setPaymentSettingsForm={setPaymentSettingsForm}
                 submitPaymentSettings={submitPaymentSettings}
-                createSamples={createSamples}
                 month={month}
                 recentLocalBackups={recentLocalBackups}
                 backupPreview={backupPreview}
@@ -862,11 +949,13 @@ function SettingsPanel(props: {
   clientForm: Partial<Client> & Pick<Client, "name">;
   setClientForm: (form: Partial<Client> & Pick<Client, "name">) => void;
   submitClient: (event: FormEvent) => void;
-  removeClient: (id: string) => void;
+  deactivateClient: (id: string) => void;
+  deleteClient: (id: string) => void;
   workerForm: Partial<Worker> & Pick<Worker, "name">;
   setWorkerForm: (form: Partial<Worker> & Pick<Worker, "name">) => void;
   submitWorker: (event: FormEvent) => void;
-  removeWorker: (id: string) => void;
+  deactivateWorker: (id: string) => void;
+  deleteWorker: (id: string) => void;
   issueShareLink: (workerId: string) => void;
   toggleShareLink: (workerId: string, active: boolean) => void;
   copyShareLink: (token: string) => void;
@@ -880,10 +969,11 @@ function SettingsPanel(props: {
   submitSortingPrice: (event: FormEvent, price: SortingUnitPrice) => void;
   submitOutsourcePrice: (event: FormEvent, price: WorkerOutsourcePrice) => void;
   submitWorkType: (workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>) => void;
+  deactivateWorkType: (id: string) => void;
+  deleteWorkType: (id: string) => void;
   paymentSettingsForm: PaymentStatementSettings;
   setPaymentSettingsForm: (form: PaymentStatementSettings) => void;
   submitPaymentSettings: (event: FormEvent) => void;
-  createSamples: () => void;
   month: string;
   recentLocalBackups: RecentLocalBackup[];
   backupPreview: BackupPreview | null;
@@ -901,16 +991,10 @@ function SettingsPanel(props: {
           <ChoiceButton active={props.settingsTab === "prices"} onClick={() => props.setSettingsTab("prices")} label="単価設定" />
           <ChoiceButton active={props.settingsTab === "paymentStatement"} onClick={() => props.setSettingsTab("paymentStatement")} label="支払明細書設定" />
         </div>
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <p className="text-sm font-semibold text-amber-900">サンプルデータは自動作成されません。動作確認が必要な場合だけ、手動で作成してください。</p>
-            <button className="button-secondary" type="button" onClick={props.createSamples}>サンプルデータを作成</button>
-          </div>
-        </div>
       </div>
-      {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} remove={props.removeClient} /> : null}
-      {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} remove={props.removeWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}
-      {props.settingsTab === "workTypes" ? <WorkTypeSettings data={props.data} submit={props.submitWorkType} /> : null}
+      {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} deactivate={props.deactivateClient} deleteItem={props.deleteClient} /> : null}
+      {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} deactivate={props.deactivateWorker} deleteItem={props.deleteWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}
+      {props.settingsTab === "workTypes" ? <WorkTypeSettings data={props.data} submit={props.submitWorkType} deactivate={props.deactivateWorkType} deleteItem={props.deleteWorkType} /> : null}
       {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} /> : null}
       {props.settingsTab === "paymentStatement" ? <PaymentStatementSettingsPanel form={props.paymentSettingsForm} setForm={props.setPaymentSettingsForm} submit={props.submitPaymentSettings} /> : null}
     </section>
@@ -1009,8 +1093,28 @@ function BackupSettingsPanel({
   );
 }
 
-function ClientSettings({ data, form, setForm, submit, remove }: { data: AppData; form: Partial<Client> & Pick<Client, "name">; setForm: (form: Partial<Client> & Pick<Client, "name">) => void; submit: (event: FormEvent) => void; remove: (id: string) => void }) {
-  return <section className="panel overflow-hidden"><PanelTitle title="顧問先設定" /><div className="border-b border-line p-5"><form className="grid gap-3 md:grid-cols-[160px_1fr_auto]" onSubmit={submit}><input className="field" placeholder="コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} /><input className="field" placeholder="顧問先名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /><button className="button-primary" type="submit">保存</button></form></div><MasterRows rows={data.clients.map((client) => ({ id: client.id, name: `${client.code} ${client.name}`, status: client.active ? "有効" : "無効" }))} remove={remove} /></section>;
+function ClientSettings({ data, form, setForm, submit, deactivate, deleteItem }: { data: AppData; form: Partial<Client> & Pick<Client, "name">; setForm: (form: Partial<Client> & Pick<Client, "name">) => void; submit: (event: FormEvent) => void; deactivate: (id: string) => void; deleteItem: (id: string) => void }) {
+  const editing = Boolean(form.id);
+  return (
+    <section className="panel overflow-hidden">
+      <PanelTitle title="顧問先設定" description="顧問先コードと顧問先名を編集できます。使用済みの顧問先は削除できないため、無効化してください。" />
+      <div className="border-b border-line p-5">
+        <div className="mb-3 text-sm font-bold text-slate-700">{editing ? `編集中: ${form.code} ${form.name}` : "新規追加"}</div>
+        <form className="grid gap-3 md:grid-cols-[160px_1fr_120px_120px]" onSubmit={submit}>
+          <input className="field" required placeholder="顧問先コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} />
+          <input className="field" required placeholder="顧問先名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          <button className="button-primary" type="submit">保存</button>
+          <button className="button-secondary" type="button" onClick={() => setForm({ name: "", code: "", active: true })}>キャンセル</button>
+        </form>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[760px] border-collapse">
+          <thead className="table-head"><tr><th className="px-4 py-3">コード</th><th className="px-4 py-3">顧問先名</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+          <tbody>{data.clients.map((client) => <tr key={client.id} className={form.id === client.id ? "bg-blue-50" : ""}><td className="table-cell font-semibold">{client.code}</td><td className="table-cell font-semibold">{client.name}</td><td className="table-cell">{client.active ? "有効" : "無効"}</td><td className="table-cell"><div className="flex justify-end gap-2"><button className="button-secondary" type="button" onClick={() => setForm(client)}>編集</button>{client.active ? <button className="button-secondary" type="button" onClick={() => deactivate(client.id)}>無効化</button> : null}<button className="button-danger" type="button" onClick={() => deleteItem(client.id)}>削除</button></div></td></tr>)}</tbody>
+        </table>
+      </div>
+    </section>
+  );
 }
 
 function WorkerSettings({
@@ -1018,7 +1122,8 @@ function WorkerSettings({
   form,
   setForm,
   submit,
-  remove,
+  deactivate,
+  deleteItem,
   issueShareLink,
   toggleShareLink,
   copyShareLink
@@ -1027,25 +1132,28 @@ function WorkerSettings({
   form: Partial<Worker> & Pick<Worker, "name">;
   setForm: (form: Partial<Worker> & Pick<Worker, "name">) => void;
   submit: (event: FormEvent) => void;
-  remove: (id: string) => void;
+  deactivate: (id: string) => void;
+  deleteItem: (id: string) => void;
   issueShareLink: (workerId: string) => void;
   toggleShareLink: (workerId: string, active: boolean) => void;
   copyShareLink: (token: string) => void;
 }) {
+  const editing = Boolean(form.id);
   return (
     <section className="panel overflow-hidden">
       <PanelTitle title="担当者設定" description="担当者コード、担当者名、状態を編集できます。共有リンクは担当者IDに紐づくため、名前を変更しても壊れません。" />
       <div className="border-b border-line p-5">
+        <div className="mb-3 text-sm font-bold text-slate-700">{editing ? `編集中: ${form.code} ${form.name}` : "新規追加"}</div>
         <form className="grid gap-3 lg:grid-cols-[140px_1fr_140px_auto]" onSubmit={submit}>
-          <input className="field" placeholder="担当者コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} />
-          <input className="field" placeholder="担当者名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          <input className="field" required placeholder="担当者コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} />
+          <input className="field" required placeholder="担当者名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           <select className="field" value={form.active === false ? "false" : "true"} onChange={(event) => setForm({ ...form, active: event.target.value === "true" })}>
             <option value="true">有効</option>
             <option value="false">無効</option>
           </select>
           <div className="flex gap-2">
             <button className="button-primary" type="submit">保存</button>
-            {form.id ? <button className="button-secondary" type="button" onClick={() => setForm({ name: "", code: "", active: true })}>新規</button> : null}
+            <button className="button-secondary" type="button" onClick={() => setForm({ name: "", code: nextMasterCode("W", data.workers.map((worker) => worker.code)), active: true })}>キャンセル</button>
           </div>
         </form>
       </div>
@@ -1054,7 +1162,7 @@ function WorkerSettings({
           const link = data.workerShareLinks.find((item) => item.workerId === worker.id);
           const url = link ? `/worker/${link.token}` : "";
           return (
-            <div key={worker.id} className="grid gap-3 p-5 lg:grid-cols-[220px_1fr_auto] lg:items-center">
+            <div key={worker.id} className={`grid gap-3 p-5 lg:grid-cols-[220px_1fr_auto] lg:items-center ${form.id === worker.id ? "bg-blue-50" : ""}`}>
               <div>
                 <div className="font-bold">{worker.code} {worker.name}</div>
                 <div className="text-xs text-slate-500">{worker.active ? "有効" : "無効"}</div>
@@ -1074,7 +1182,8 @@ function WorkerSettings({
                 <button className="button-secondary" type="button" onClick={() => issueShareLink(worker.id)}>共有リンク発行</button>
                 {link ? <button className="button-secondary" type="button" onClick={() => copyShareLink(link.token)}>コピー</button> : null}
                 {link ? <button className={link.active ? "button-danger" : "button-secondary"} type="button" onClick={() => toggleShareLink(worker.id, !link.active)}>{link.active ? "無効化" : "有効化"}</button> : null}
-                {worker.active ? <button className="button-danger" type="button" onClick={() => remove(worker.id)}>無効化</button> : null}
+                {worker.active ? <button className="button-secondary" type="button" onClick={() => deactivate(worker.id)}>無効化</button> : null}
+                <button className="button-danger" type="button" onClick={() => deleteItem(worker.id)}>削除</button>
               </div>
             </div>
           );
@@ -1083,16 +1192,17 @@ function WorkerSettings({
     </section>
   );
 }
-function MasterRows({ rows, remove }: { rows: { id: string; name: string; status: string }[]; remove: (id: string) => void }) {
-  return <div className="overflow-x-auto"><table className="w-full min-w-[520px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">名称</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id}><td className="table-cell font-semibold">{row.name}</td><td className="table-cell">{row.status}</td><td className="table-cell text-right"><button className="button-danger" onClick={() => remove(row.id)}>無効化</button></td></tr>)}</tbody></table></div>;
-}
-
-function WorkTypeSettings({ data, submit }: { data: AppData; submit: (workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>) => void }) {
-  const [form, setForm] = useState<Partial<WorkType> & Pick<WorkType, "name" | "unit">>({ code: "", name: "", unit: "count", active: true });
+function WorkTypeSettings({ data, submit, deactivate, deleteItem }: { data: AppData; submit: (workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>) => void; deactivate: (id: string) => void; deleteItem: (id: string) => void }) {
+  const [form, setForm] = useState<Partial<WorkType> & Pick<WorkType, "name" | "unit">>({ code: nextMasterCode("T", data.workTypes.map((workType) => workType.code)), name: "", unit: "count", active: true });
   const [salesPrice, setSalesPrice] = useState(0);
   const [outsourcePrice, setOutsourcePrice] = useState(0);
   const unitQuantity = form.unit === "count" ? 1 : 10;
   const unitText = form.unit === "count" ? "1件あたり" : "10分あたり";
+  const editing = Boolean(form.id);
+
+  useEffect(() => {
+    if (!form.id && !form.name) setForm((current) => ({ ...current, code: nextMasterCode("T", data.workTypes.map((workType) => workType.code)) }));
+  }, [data.workTypes, form.id, form.name]);
 
   function edit(workType: WorkType) {
     const price = data.unitPrices.find((item) => item.workTypeId === workType.id);
@@ -1102,14 +1212,16 @@ function WorkTypeSettings({ data, submit }: { data: AppData; submit: (workType: 
   }
 
   function reset() {
-    setForm({ code: "", name: "", unit: "count", active: true });
+    setForm({ code: nextMasterCode("T", data.workTypes.map((workType) => workType.code)), name: "", unit: "count", active: true });
     setSalesPrice(0);
     setOutsourcePrice(0);
   }
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
+    if (!form.code?.trim()) return;
     if (!form.name.trim()) return;
+    if (salesPrice < 0 || outsourcePrice < 0) return;
     submit(form, { amount: salesPrice, costAmount: 0, outsourceAmount: outsourcePrice, quantity: unitQuantity, unitLabel: unitText });
     reset();
   }
@@ -1118,18 +1230,19 @@ function WorkTypeSettings({ data, submit }: { data: AppData; submit: (workType: 
     <section className="panel overflow-hidden">
       <PanelTitle title="作業種別設定" description="作業種別の追加、編集、無効化、売上単価、外注単価を管理します。無効化しても過去履歴には表示されます。" />
       <div className="border-b border-line p-5">
+        <div className="mb-3 text-sm font-bold text-slate-700">{editing ? `編集中: ${form.code} ${form.name}` : "新規追加"}</div>
         <form className="grid gap-3 lg:grid-cols-[140px_1fr_140px_140px_140px_auto]" onSubmit={onSubmit}>
-          <input className="field" placeholder="作業種別コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} />
-          <input className="field" placeholder="作業種別名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          <input className="field" required placeholder="作業種別コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} />
+          <input className="field" required placeholder="作業種別名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
           <select className="field" value={form.unit} onChange={(event) => setForm({ ...form, unit: event.target.value as WorkType["unit"] })}>
             <option value="count">件数</option>
             <option value="time">時間</option>
           </select>
-          <input className="field" type="number" min={0} placeholder={`売上単価（${unitText}）`} value={salesPrice} onChange={(event) => setSalesPrice(Number(event.target.value))} />
-          <input className="field" type="number" min={0} placeholder={`外注単価（${unitText}）`} value={outsourcePrice} onChange={(event) => setOutsourcePrice(Number(event.target.value))} />
+          <input className="field" type="number" min={0} required placeholder={`売上単価（${unitText}）`} value={salesPrice} onChange={(event) => setSalesPrice(Number(event.target.value))} />
+          <input className="field" type="number" min={0} required placeholder={`外注単価（${unitText}）`} value={outsourcePrice} onChange={(event) => setOutsourcePrice(Number(event.target.value))} />
           <div className="flex gap-2">
             <button className="button-primary" type="submit">保存</button>
-            {form.id ? <button className="button-secondary" type="button" onClick={reset}>新規</button> : null}
+            <button className="button-secondary" type="button" onClick={reset}>キャンセル</button>
           </div>
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-600 lg:col-span-6">
             <input type="checkbox" checked={form.active !== false} onChange={(event) => setForm({ ...form, active: event.target.checked })} />
@@ -1140,7 +1253,7 @@ function WorkTypeSettings({ data, submit }: { data: AppData; submit: (workType: 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse">
           <thead className="table-head"><tr><th className="px-4 py-3">コード</th><th className="px-4 py-3">作業種別</th><th className="px-4 py-3">単位</th><th className="px-4 py-3 text-right">売上単価</th><th className="px-4 py-3 text-right">外注単価</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
-          <tbody>{data.workTypes.map((workType) => { const price = data.unitPrices.find((item) => item.workTypeId === workType.id); const label = workType.unit === "count" ? "1件あたり" : "10分あたり"; return <tr key={workType.id}><td className="table-cell font-semibold">{workType.code}</td><td className="table-cell font-semibold">{workType.name}</td><td className="table-cell">{unitLabel(workType)}</td><td className="table-cell text-right">{label}{formatNumber(price?.amount ?? 0)}円</td><td className="table-cell text-right">{label}{formatNumber(price?.outsourceAmount ?? 0)}円</td><td className="table-cell">{workType.active ? "有効" : "無効"}</td><td className="table-cell text-right"><button className="button-secondary" type="button" onClick={() => edit(workType)}>編集</button></td></tr>; })}</tbody>
+          <tbody>{data.workTypes.map((workType) => { const price = data.unitPrices.find((item) => item.workTypeId === workType.id); const label = workType.unit === "count" ? "1件あたり" : "10分あたり"; return <tr key={workType.id} className={form.id === workType.id ? "bg-blue-50" : ""}><td className="table-cell font-semibold">{workType.code}</td><td className="table-cell font-semibold">{workType.name}</td><td className="table-cell">{unitLabel(workType)}</td><td className="table-cell text-right">{label}{formatNumber(price?.amount ?? 0)}円</td><td className="table-cell text-right">{label}{formatNumber(price?.outsourceAmount ?? 0)}円</td><td className="table-cell">{workType.active ? "有効" : "無効"}</td><td className="table-cell"><div className="flex justify-end gap-2"><button className="button-secondary" type="button" onClick={() => edit(workType)}>編集</button>{workType.active ? <button className="button-secondary" type="button" onClick={() => deactivate(workType.id)}>無効化</button> : null}<button className="button-danger" type="button" onClick={() => deleteItem(workType.id)}>削除</button></div></td></tr>; })}</tbody>
         </table>
       </div>
     </section>
