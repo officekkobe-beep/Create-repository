@@ -67,6 +67,10 @@ function costByUnit(quantity: number, price: Pick<UnitPrice, "costAmount" | "qua
   return Math.round((quantity / price.quantity) * price.costAmount);
 }
 
+function outsourceByUnit(quantity: number, price: Pick<UnitPrice, "outsourceAmount" | "quantity">) {
+  return Math.round((quantity / price.quantity) * price.outsourceAmount);
+}
+
 function outsourceAmount(quantity: number, unitPrice: number, unitQuantity = 1) {
   return Math.round((quantity / unitQuantity) * unitPrice);
 }
@@ -221,6 +225,7 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
         workMinutes: 0,
         revenueUnitPrice: price.amount,
         costUnitPrice: price.costAmount,
+        outsourceUnitPrice: price.outsourceAmount,
         unitQuantity: price.quantity,
         unitLabel: price.unitLabel,
         revenue: 0,
@@ -234,8 +239,8 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     const quantity = workType.unit === "count" ? row.documentCount : row.workMinutes;
     row.revenue = amountByUnit(quantity, price);
     row.cost = costByUnit(quantity, price);
-    row.outsourceCost += 0;
-    row.grossProfit = row.revenue - row.cost;
+    row.outsourceCost = outsourceByUnit(quantity, price);
+    row.grossProfit = row.revenue - row.outsourceCost;
     rowMap.set(key, row);
   });
 
@@ -249,7 +254,8 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     client.rows.push(row);
     client.totalRevenue += row.revenue;
     client.totalCost += row.cost;
-    client.grossProfit = client.totalRevenue - client.totalCost;
+    client.totalOutsourceCost += row.outsourceCost;
+    client.grossProfit = client.totalRevenue - client.totalOutsourceCost;
     return list;
   }, []);
 
@@ -273,6 +279,8 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
 export function buildOutsourcePaymentSummary(data: AppData, month: string) {
   const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
+  const workTypes = new Map(data.workTypes.map((workType) => [workType.id, workType]));
+  const unitPrices = new Map(data.unitPrices.map((price) => [price.workTypeId, price]));
   const rowMap = new Map<string, WorkerOutsourceSummaryRow>();
   const clientOutsourceMap = new Map<string, { manual: number; smart: number; submitted: number; office: number }>();
 
@@ -359,11 +367,13 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
   data.monthlyWorkReports
     .filter((report) => report.workMonth === month)
     .forEach((report) => {
-      const price = workerOutsourcePrice(data, report.workerId);
       const row = ensureWorker(report.workerId);
       const clientName = clients.get(report.clientId) ?? "未設定";
-      if (report.workTypeId === "submitted-documents") {
-        const amount = report.documentCount * price.submittedDocumentsUnitPrice;
+      const workType = workTypes.get(report.workTypeId);
+      const price = unitPrices.get(report.workTypeId);
+      if (!workType || !price) return;
+      if (workType.unit === "count") {
+        const amount = outsourceByUnit(report.documentCount, price);
         row.submittedDocumentsCount += report.documentCount;
         row.submittedDocumentsAmount += amount;
         addClientOutsource(report.clientId, "submitted", amount);
@@ -373,15 +383,15 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
           workerName: row.workerName,
           workDate: report.workDate,
           clientName,
-          workKind: "提出書類",
+          workKind: workType.name,
           quantity: report.documentCount,
           quantityLabel: `${formatNumber(report.documentCount)}件`,
-          unitPrice: price.submittedDocumentsUnitPrice,
+          unitPrice: price.outsourceAmount,
           amount,
           memo: report.memo
         });
       } else {
-        const amount = outsourceAmount(report.workMinutes, price.officeWorkUnitPrice, 10);
+        const amount = outsourceByUnit(report.workMinutes, price);
         row.officeWorkMinutes += report.workMinutes;
         row.officeWorkAmount += amount;
         addClientOutsource(report.clientId, "office", amount);
@@ -391,10 +401,10 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
           workerName: row.workerName,
           workDate: report.workDate,
           clientName,
-          workKind: "その他事務業務",
+          workKind: workType.name,
           quantity: report.workMinutes,
           quantityLabel: `${formatNumber(report.workMinutes)}分`,
-          unitPrice: price.officeWorkUnitPrice,
+          unitPrice: price.outsourceAmount,
           amount,
           memo: report.memo
         });
@@ -424,7 +434,8 @@ export function buildClientProfitability(data: AppData, month: string): ClientPr
       const sortingRevenue = sorting?.sortingRevenue ?? 0;
       const submittedDocumentsRevenue = submitted?.revenue ?? 0;
       const officeWorkRevenue = office?.revenue ?? 0;
-      const totalRevenue = sortingRevenue + submittedDocumentsRevenue + officeWorkRevenue;
+      const monthlyRevenue = monthly?.totalRevenue ?? 0;
+      const totalRevenue = sortingRevenue + monthlyRevenue;
       const totalOutsourceCost = outsource.manual + outsource.smart + outsource.submitted + outsource.office;
       const grossProfit = totalRevenue - totalOutsourceCost;
       return {

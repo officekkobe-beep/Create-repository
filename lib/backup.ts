@@ -5,7 +5,7 @@ import {
 } from "./calculations";
 import type { AppData, DailyReport, MonthlyWorkReport } from "./types";
 
-export const BACKUP_SCHEMA_VERSION = "1";
+export const BACKUP_SCHEMA_VERSION = "2";
 const RECENT_BACKUP_KEY = "sorting-daily-report-recent-backups";
 const RECENT_BACKUP_LIMIT = 5;
 
@@ -17,6 +17,7 @@ export type RecentLocalBackup = {
   last_saved_work?: DailyReport | MonthlyWorkReport;
   workers: AppData["workers"];
   clients: AppData["clients"];
+  work_types: AppData["workTypes"];
   unit_prices: AppData["unitPrices"];
   sorting_unit_prices: AppData["sortingUnitPrices"];
   worker_outsource_prices: AppData["workerOutsourcePrices"];
@@ -115,6 +116,7 @@ export function saveRecentLocalBackup(data: AppData, lastSavedWork?: DailyReport
     last_saved_work: lastSavedWork,
     workers: data.workers,
     clients: data.clients,
+    work_types: data.workTypes,
     unit_prices: data.unitPrices,
     sorting_unit_prices: data.sortingUnitPrices,
     worker_outsource_prices: data.workerOutsourcePrices
@@ -137,7 +139,7 @@ export function readRecentLocalBackups(): RecentLocalBackup[] {
 }
 
 export function downloadSortingReportsBackupCsv(data: AppData, month?: string) {
-  const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
+  const workers = new Map(data.workers.map((worker) => [worker.id, `${worker.code} ${worker.name}`]));
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
   const reports = month ? data.reports.filter((report) => report.workMonth === month) : data.reports;
   downloadCsv(`backup_sorting_reports_${month ?? "all"}_${timestampForFile()}.csv`, [
@@ -157,12 +159,12 @@ export function downloadSortingReportsBackupCsv(data: AppData, month?: string) {
 }
 
 export function downloadMonthlyWorkReportsBackupCsv(data: AppData, month?: string) {
-  const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
+  const workers = new Map(data.workers.map((worker) => [worker.id, `${worker.code} ${worker.name}`]));
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
-  const workTypes = new Map(data.workTypes.map((workType) => [workType.id, workType.name]));
+  const workTypes = new Map(data.workTypes.map((workType) => [workType.id, `${workType.code} ${workType.name}`]));
   const reports = month ? data.monthlyWorkReports.filter((report) => report.workMonth === month) : data.monthlyWorkReports;
   downloadCsv(`backup_monthly_work_reports_${month ?? "all"}_${timestampForFile()}.csv`, [
-    ["作業月", "作業日", "担当者", "顧問先", "作業区分", "書類数", "作業時間（分）", "登録元", "メモ"],
+    ["作業月", "作業日", "担当者", "顧問先", "作業区分", "数量", "作業時間（分）", "登録元", "メモ"],
     ...reports.map((report) => [
       report.workMonth,
       report.workDate,

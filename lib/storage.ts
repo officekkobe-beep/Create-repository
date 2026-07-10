@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { monthFromDate } from "./calculations";
-import { defaultPaymentStatementSettings, defaultSortingUnitPrices, defaultUnitPrices, defaultWorkerOutsourcePrices, defaultWorkTypes, sampleData } from "./sample-data";
-import type { AppData, Client, DailyReport, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink } from "./types";
+import { defaultPaymentStatementSettings, sampleData } from "./sample-data";
+import type { AppData, Client, DailyReport, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkType } from "./types";
 
 const STORAGE_KEY = "sorting-daily-report-data";
 
@@ -17,6 +17,14 @@ function createToken() {
   return crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
 }
 
+function nextCode(prefix: string, existingCodes: string[]) {
+  const max = existingCodes.reduce((value, code) => {
+    const match = code.match(new RegExp(`^${prefix}(\\d+)$`));
+    return match ? Math.max(value, Number(match[1])) : value;
+  }, 0);
+  return `${prefix}${String(max + 1).padStart(3, "0")}`;
+}
+
 function supabaseClient(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -24,18 +32,31 @@ function supabaseClient(): SupabaseClient | null {
   return createClient(url, anonKey);
 }
 
-function withDefaults(data: Partial<AppData>): AppData {
-  const unitPrices = data.unitPrices ?? [];
-  const sortingUnitPrices = data.sortingUnitPrices ?? [];
-  const workers = data.workers ?? sampleData.workers;
-  const workerOutsourcePrices = data.workerOutsourcePrices ?? [];
+function emptyAppData(): AppData {
+  return {
+    workers: [],
+    clients: [],
+    workTypes: [],
+    unitPrices: [],
+    sortingUnitPrices: [],
+    workerOutsourcePrices: [],
+    workerShareLinks: [],
+    paymentStatementSettings: defaultPaymentStatementSettings,
+    reports: [],
+    monthlyWorkReports: []
+  };
+}
+
+function normalizeData(data: Partial<AppData>): AppData {
+  const workers = (data.workers ?? []).map((worker, index) => ({ ...worker, code: worker.code || `W${String(index + 1).padStart(3, "0")}` }));
+  const workTypes = (data.workTypes ?? []).map((workType, index) => ({ ...workType, code: workType.code || `T${String(index + 1).padStart(3, "0")}` }));
   return {
     workers,
-    clients: data.clients ?? sampleData.clients,
-    workTypes: data.workTypes ?? defaultWorkTypes,
-    unitPrices: defaultUnitPrices.map((price) => ({ ...price, ...(unitPrices.find((item) => item.workTypeId === price.workTypeId) ?? {}) })),
-    sortingUnitPrices: defaultSortingUnitPrices.map((price) => ({ ...price, ...(sortingUnitPrices.find((item) => item.id === price.id) ?? {}) })),
-    workerOutsourcePrices: defaultWorkerOutsourcePrices(workers).map((price) => ({ ...price, ...(workerOutsourcePrices.find((item) => item.workerId === price.workerId) ?? {}) })),
+    clients: data.clients ?? [],
+    workTypes,
+    unitPrices: (data.unitPrices ?? []).map((price) => ({ ...price, outsourceAmount: price.outsourceAmount ?? price.costAmount ?? 0 })),
+    sortingUnitPrices: data.sortingUnitPrices ?? [],
+    workerOutsourcePrices: data.workerOutsourcePrices ?? [],
     workerShareLinks: data.workerShareLinks ?? [],
     paymentStatementSettings: { ...defaultPaymentStatementSettings, ...(data.paymentStatementSettings ?? {}) },
     reports: (data.reports ?? []).map((report) => ({ ...report, source: report.source ?? "admin", sourceWorkerId: report.sourceWorkerId ?? "" })),
@@ -44,13 +65,10 @@ function withDefaults(data: Partial<AppData>): AppData {
 }
 
 function loadLocal(): AppData {
-  if (typeof window === "undefined") return sampleData;
+  if (typeof window === "undefined") return emptyAppData();
   const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sampleData));
-    return sampleData;
-  }
-  const data = withDefaults(JSON.parse(raw) as Partial<AppData>);
+  if (!raw) return emptyAppData();
+  const data = normalizeData(JSON.parse(raw) as Partial<AppData>);
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   return data;
 }
@@ -131,6 +149,85 @@ function fromMonthlyWorkReport(input: MonthlyWorkReport) {
   };
 }
 
+function mergeById<T extends { id: string }>(current: T[], samples: T[]) {
+  return [...current, ...samples.filter((sample) => !current.some((item) => item.id === sample.id))];
+}
+
+function mergeByKey<T>(current: T[], samples: T[], keyOf: (item: T) => string) {
+  return [...current, ...samples.filter((sample) => !current.some((item) => keyOf(item) === keyOf(sample)))];
+}
+
+export async function createSampleData(current: AppData) {
+  const supabase = supabaseClient();
+  const next: AppData = {
+    ...current,
+    workers: mergeById(current.workers, sampleData.workers),
+    clients: mergeById(current.clients, sampleData.clients),
+    reports: mergeById(current.reports, sampleData.reports),
+    workTypes: mergeById(current.workTypes, sampleData.workTypes),
+    unitPrices: mergeByKey(current.unitPrices, sampleData.unitPrices, (item) => item.workTypeId),
+    sortingUnitPrices: mergeByKey(current.sortingUnitPrices, sampleData.sortingUnitPrices, (item) => item.id),
+    workerOutsourcePrices: mergeByKey(current.workerOutsourcePrices, sampleData.workerOutsourcePrices, (item) => item.workerId),
+    monthlyWorkReports: mergeById(current.monthlyWorkReports, sampleData.monthlyWorkReports)
+  };
+
+  if (supabase) {
+    const missingWorkers = sampleData.workers.filter((sample) => !current.workers.some((item) => item.id === sample.id));
+    const missingClients = sampleData.clients.filter((sample) => !current.clients.some((item) => item.id === sample.id));
+    const missingWorkTypes = sampleData.workTypes.filter((sample) => !current.workTypes.some((item) => item.id === sample.id));
+    const missingUnitPrices = sampleData.unitPrices.filter((sample) => !current.unitPrices.some((item) => item.workTypeId === sample.workTypeId));
+    const missingSortingUnitPrices = sampleData.sortingUnitPrices.filter((sample) => !current.sortingUnitPrices.some((item) => item.id === sample.id));
+    const missingWorkerOutsourcePrices = sampleData.workerOutsourcePrices.filter((sample) => !current.workerOutsourcePrices.some((item) => item.workerId === sample.workerId));
+    const missingReports = sampleData.reports.filter((sample) => !current.reports.some((item) => item.id === sample.id));
+    const missingMonthlyReports = sampleData.monthlyWorkReports.filter((sample) => !current.monthlyWorkReports.some((item) => item.id === sample.id));
+
+    if (missingWorkers.length) await supabase.from("workers").upsert(missingWorkers.map((worker) => ({ id: worker.id, worker_code: worker.code, name: worker.name, active: true, is_active: true, created_at: worker.createdAt })));
+    if (missingClients.length) await supabase.from("clients").upsert(missingClients.map((client) => ({ id: client.id, name: client.name, code: client.code, active: true, created_at: client.createdAt })));
+    if (missingWorkTypes.length) await supabase.from("work_types").upsert(missingWorkTypes.map((workType) => ({ id: workType.id, work_type_code: workType.code, name: workType.name, unit: workType.unit, unit_type: workType.unit, active: workType.active, is_active: workType.active, created_at: workType.createdAt })));
+    if (missingUnitPrices.length) await supabase.from("unit_prices").upsert(
+      missingUnitPrices.map((price) => ({
+        work_type_id: price.workTypeId,
+        amount: price.amount,
+        cost_amount: price.costAmount,
+        outsource_amount: price.outsourceAmount,
+        outsource_unit_price: price.outsourceAmount,
+        quantity: price.quantity,
+        unit_label: price.unitLabel,
+        created_at: price.createdAt,
+        updated_at: price.updatedAt
+      }))
+    );
+    if (missingSortingUnitPrices.length) await supabase.from("sorting_unit_prices").upsert(
+      missingSortingUnitPrices.map((price) => ({
+        id: price.id,
+        name: price.name,
+        amount: price.amount,
+        cost_amount: price.costAmount,
+        quantity: price.quantity,
+        unit_label: price.unitLabel,
+        created_at: price.createdAt,
+        updated_at: price.updatedAt
+      }))
+    );
+    if (missingWorkerOutsourcePrices.length) await supabase.from("worker_outsource_prices").upsert(
+      missingWorkerOutsourcePrices.map((price) => ({
+        worker_id: price.workerId,
+        manual_unit_price: price.manualUnitPrice,
+        smart_unit_price: price.smartUnitPrice,
+        submitted_documents_unit_price: price.submittedDocumentsUnitPrice,
+        office_work_unit_price: price.officeWorkUnitPrice,
+        created_at: price.createdAt,
+        updated_at: price.updatedAt
+      }))
+    );
+    if (missingReports.length) await supabase.from("daily_reports").upsert(missingReports.map(fromReport));
+    if (missingMonthlyReports.length) await supabase.from("monthly_work_reports").upsert(missingMonthlyReports.map(fromMonthlyWorkReport));
+  }
+
+  saveLocal(next);
+  return next;
+}
+
 export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "local" }> {
   const supabase = supabaseClient();
   if (!supabase) return { data: loadLocal(), mode: "local" };
@@ -150,19 +247,20 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
 
   if (workersResult.error || clientsResult.error || reportsResult.error || workTypesResult.error || unitPricesResult.error || sortingUnitPricesResult.error || workerOutsourcePricesResult.error || workerShareLinksResult.error || paymentStatementSettingsResult.error || monthlyWorkReportsResult.error) {
     console.warn(
-      "Supabase fetch failed. Falling back to local data.",
+      "Supabase fetch failed. Local sample data will not be merged.",
       workersResult.error ?? clientsResult.error ?? reportsResult.error ?? workTypesResult.error ?? unitPricesResult.error ?? sortingUnitPricesResult.error ?? workerOutsourcePricesResult.error ?? workerShareLinksResult.error ?? paymentStatementSettingsResult.error ?? monthlyWorkReportsResult.error
     );
-    return { data: loadLocal(), mode: "local" };
+    return { data: emptyAppData(), mode: "supabase" };
   }
 
   return {
     mode: "supabase",
-    data: withDefaults({
+    data: normalizeData({
       workers: (workersResult.data ?? []).map((row) => ({
         id: row.id,
+        code: row.worker_code ?? row.code ?? "",
         name: row.name,
-        active: row.active,
+        active: row.is_active ?? row.active ?? true,
         createdAt: row.created_at
       })),
       clients: (clientsResult.data ?? []).map((row) => ({
@@ -175,15 +273,17 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
       reports: (reportsResult.data ?? []).map(toReport),
       workTypes: (workTypesResult.data ?? []).map((row) => ({
         id: row.id,
+        code: row.work_type_code ?? row.code ?? "",
         name: row.name,
-        unit: row.unit,
-        active: row.active,
+        unit: row.unit_type ?? row.unit,
+        active: row.is_active ?? row.active ?? true,
         createdAt: row.created_at
       })),
       unitPrices: (unitPricesResult.data ?? []).map((row) => ({
         workTypeId: row.work_type_id,
         amount: row.amount,
         costAmount: row.cost_amount ?? 0,
+        outsourceAmount: row.outsource_amount ?? row.outsource_unit_price ?? 0,
         quantity: row.quantity,
         unitLabel: row.unit_label,
         createdAt: row.created_at,
@@ -239,6 +339,7 @@ export async function upsertWorker(worker: Partial<Worker> & Pick<Worker, "name"
   const supabase = supabaseClient();
   const record: Worker = {
     id: worker.id ?? createId("worker"),
+    code: worker.code?.trim() || nextCode("W", current.workers.map((item) => item.code)),
     name: worker.name.trim(),
     active: worker.active ?? true,
     createdAt: worker.createdAt ?? nowIso()
@@ -259,7 +360,7 @@ export async function upsertWorker(worker: Partial<Worker> & Pick<Worker, "name"
     ];
   }
   if (supabase) {
-    await supabase.from("workers").upsert({ id: record.id, name: record.name, active: record.active, created_at: record.createdAt });
+    await supabase.from("workers").upsert({ id: record.id, worker_code: record.code, name: record.name, active: record.active, is_active: record.active, created_at: record.createdAt });
     await supabase.from("worker_outsource_prices").upsert({
       worker_id: record.id,
       manual_unit_price: next.workerOutsourcePrices.find((item) => item.workerId === record.id)?.manualUnitPrice ?? 40,
@@ -276,8 +377,15 @@ export async function upsertWorker(worker: Partial<Worker> & Pick<Worker, "name"
 
 export async function deleteWorker(id: string, current: AppData) {
   const supabase = supabaseClient();
-  const next = { ...current, workers: current.workers.filter((item) => item.id !== id), workerShareLinks: current.workerShareLinks.filter((item) => item.workerId !== id) };
-  if (supabase) await supabase.from("workers").delete().eq("id", id);
+  const next = {
+    ...current,
+    workers: current.workers.map((item) => (item.id === id ? { ...item, active: false } : item)),
+    workerShareLinks: current.workerShareLinks.map((item) => (item.workerId === id ? { ...item, active: false, updatedAt: nowIso() } : item))
+  };
+  if (supabase) {
+    await supabase.from("worker_share_links").update({ active: false, updated_at: nowIso() }).eq("worker_id", id);
+    await supabase.from("workers").update({ active: false }).eq("id", id);
+  }
   saveLocal(next);
   return next;
 }
@@ -342,8 +450,65 @@ export async function upsertClient(client: Partial<Client> & Pick<Client, "name"
 
 export async function deleteClient(id: string, current: AppData) {
   const supabase = supabaseClient();
-  const next = { ...current, clients: current.clients.filter((item) => item.id !== id) };
-  if (supabase) await supabase.from("clients").delete().eq("id", id);
+  const next = { ...current, clients: current.clients.map((item) => (item.id === id ? { ...item, active: false } : item)) };
+  if (supabase) await supabase.from("clients").update({ active: false, is_active: false }).eq("id", id);
+  saveLocal(next);
+  return next;
+}
+
+export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>, current: AppData) {
+  const supabase = supabaseClient();
+  const existing = workType.id ? current.workTypes.find((item) => item.id === workType.id) : undefined;
+  const id = workType.id ?? createId("work-type");
+  const record: WorkType = {
+    id,
+    code: workType.code?.trim() || existing?.code || nextCode("T", current.workTypes.map((item) => item.code)),
+    name: workType.name.trim(),
+    unit: workType.unit,
+    active: workType.active ?? existing?.active ?? true,
+    createdAt: workType.createdAt ?? existing?.createdAt ?? nowIso()
+  };
+  const unitQuantity = record.unit === "count" ? 1 : 10;
+  const unitLabel = record.unit === "count" ? "1件あたり" : "10分あたり";
+  const existingPrice = current.unitPrices.find((item) => item.workTypeId === id);
+  const priceRecord: UnitPrice = {
+    workTypeId: id,
+    amount: Number(price.amount ?? existingPrice?.amount ?? 0),
+    costAmount: Number(price.costAmount ?? existingPrice?.costAmount ?? 0),
+    outsourceAmount: Number(price.outsourceAmount ?? existingPrice?.outsourceAmount ?? 0),
+    quantity: unitQuantity,
+    unitLabel,
+    createdAt: existingPrice?.createdAt ?? nowIso(),
+    updatedAt: nowIso()
+  };
+  const next = {
+    ...current,
+    workTypes: [...current.workTypes.filter((item) => item.id !== id), record].sort((a, b) => a.code.localeCompare(b.code, "ja")),
+    unitPrices: [...current.unitPrices.filter((item) => item.workTypeId !== id), priceRecord]
+  };
+  if (supabase) {
+    await supabase.from("work_types").upsert({
+      id: record.id,
+      work_type_code: record.code,
+      name: record.name,
+      unit: record.unit,
+      unit_type: record.unit,
+      active: record.active,
+      is_active: record.active,
+      created_at: record.createdAt
+    });
+    await supabase.from("unit_prices").upsert({
+      work_type_id: priceRecord.workTypeId,
+      amount: priceRecord.amount,
+      cost_amount: priceRecord.costAmount,
+      outsource_amount: priceRecord.outsourceAmount,
+      outsource_unit_price: priceRecord.outsourceAmount,
+      quantity: priceRecord.quantity,
+      unit_label: priceRecord.unitLabel,
+      created_at: priceRecord.createdAt,
+      updated_at: priceRecord.updatedAt
+    });
+  }
   saveLocal(next);
   return next;
 }
@@ -427,6 +592,8 @@ export async function updateUnitPrice(price: UnitPrice, current: AppData) {
       work_type_id: record.workTypeId,
       amount: record.amount,
       cost_amount: record.costAmount,
+      outsource_amount: record.outsourceAmount,
+      outsource_unit_price: record.outsourceAmount,
       quantity: record.quantity,
       unit_label: record.unitLabel,
       created_at: record.createdAt,

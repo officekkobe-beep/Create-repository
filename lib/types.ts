@@ -1,5 +1,6 @@
 export type Worker = {
   id: string;
+  code: string;
   name: string;
   active: boolean;
   createdAt: string;
@@ -42,7 +43,8 @@ export type DailyReport = {
 export type WorkUnit = "count" | "time";
 
 export type WorkType = {
-  id: "submitted-documents" | "office-work";
+  id: string;
+  code: string;
   name: string;
   unit: WorkUnit;
   active: boolean;
@@ -50,9 +52,10 @@ export type WorkType = {
 };
 
 export type UnitPrice = {
-  workTypeId: WorkType["id"];
+  workTypeId: string;
   amount: number;
   costAmount: number;
+  outsourceAmount: number;
   quantity: number;
   unitLabel: string;
   createdAt: string;
@@ -101,7 +104,7 @@ export type MonthlyWorkReport = {
   workDate: string;
   workMonth: string;
   workerId: string;
-  workTypeId: WorkType["id"];
+  workTypeId: string;
   clientId: string;
   documentCount: number;
   workMinutes: number;
@@ -177,6 +180,7 @@ export type MonthlyWorkSummaryRow = {
   workMinutes: number;
   revenueUnitPrice: number;
   costUnitPrice: number;
+  outsourceUnitPrice: number;
   unitQuantity: number;
   unitLabel: string;
   revenue: number;
@@ -201,7 +205,7 @@ export type OutsourceDetailRow = {
   workerName: string;
   workDate: string;
   clientName: string;
-  workKind: "手入力" | "スマート取込" | "提出書類" | "その他事務業務";
+  workKind: string;
   quantity: number;
   quantityLabel: string;
   unitPrice: number;

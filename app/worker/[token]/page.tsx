@@ -15,7 +15,7 @@ import {
 import { fetchData, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
 import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
 
-type WorkKind = "sorting" | "submitted-documents" | "office-work";
+type WorkKind = "sorting" | string;
 
 const emptyData: AppData = {
   workers: [],
@@ -61,10 +61,11 @@ function blankSorting(workerId: string, data: AppData): ReportInput {
 }
 
 function blankMonthly(workerId: string, data: AppData, kind: WorkKind): MonthlyWorkReportInput {
+  const workTypeId = kind !== "sorting" ? kind : data.workTypes.find((workType) => workType.active)?.id ?? "";
   return {
     workDate: todayDate(),
     workerId,
-    workTypeId: kind === "office-work" ? "office-work" : "submitted-documents",
+    workTypeId,
     clientId: data.clients.find((client) => client.active)?.id ?? "",
     documentCount: 0,
     workMinutes: 0,
@@ -83,7 +84,7 @@ export default function WorkerInputPage() {
   const [message, setMessage] = useState("");
   const [workKind, setWorkKind] = useState<WorkKind>("sorting");
   const [sortingForm, setSortingForm] = useState<ReportInput>(blankSorting("", emptyData));
-  const [monthlyForm, setMonthlyForm] = useState<MonthlyWorkReportInput>(blankMonthly("", emptyData, "submitted-documents"));
+  const [monthlyForm, setMonthlyForm] = useState<MonthlyWorkReportInput>(blankMonthly("", emptyData, "sorting"));
   const [sortingCountState, setSortingCountState] = useState<SortingCountState>(emptySortingCountState());
 
   useEffect(() => {
@@ -93,8 +94,9 @@ export default function WorkerInputPage() {
       setData(result.data);
       setWorker(matchedWorker ?? null);
       if (matchedWorker) {
+        const firstWorkTypeId = result.data.workTypes.find((workType) => workType.active)?.id ?? "sorting";
         setSortingForm(blankSorting(matchedWorker.id, result.data));
-        setMonthlyForm(blankMonthly(matchedWorker.id, result.data, "submitted-documents"));
+        setMonthlyForm(blankMonthly(matchedWorker.id, result.data, firstWorkTypeId));
       }
       setLoading(false);
     });
@@ -110,6 +112,7 @@ export default function WorkerInputPage() {
     });
   }, [data.reports, sortingForm.clientId, sortingForm.workDate, worker]);
   const previousTotal = previousSorting?.totalSortingCount;
+  const selectedWorkType = useMemo(() => data.workTypes.find((workType) => workType.id === monthlyForm.workTypeId), [data.workTypes, monthlyForm.workTypeId]);
 
   useEffect(() => {
     if (workKind !== "sorting") return;
@@ -176,24 +179,25 @@ export default function WorkerInputPage() {
   async function submitMonthly(event: FormEvent) {
     event.preventDefault();
     if (!worker) return;
-    const kind = workKind === "office-work" ? "office-work" : "submitted-documents";
+    const workType = data.workTypes.find((item) => item.id === workKind);
+    if (!workType) return notify("作業種別を選択してください");
     if (!monthlyForm.clientId) return notify("顧問先を選択してください");
-    if (kind === "submitted-documents" && monthlyForm.documentCount <= 0) return notify("書類数を入力してください");
-    if (kind === "office-work" && monthlyForm.workMinutes <= 0) return notify("作業時間（分）を入力してください");
+    if (workType.unit === "count" && monthlyForm.documentCount <= 0) return notify("数量を入力してください");
+    if (workType.unit === "time" && monthlyForm.workMinutes <= 0) return notify("作業時間（分）を入力してください");
     const next = await upsertMonthlyWorkReport(
       {
         ...monthlyForm,
         workerId: worker.id,
-        workTypeId: kind,
-        documentCount: kind === "submitted-documents" ? monthlyForm.documentCount : 0,
-        workMinutes: kind === "office-work" ? monthlyForm.workMinutes : 0,
+        workTypeId: workType.id,
+        documentCount: workType.unit === "count" ? monthlyForm.documentCount : 0,
+        workMinutes: workType.unit === "time" ? monthlyForm.workMinutes : 0,
         source: "worker_link",
         sourceWorkerId: worker.id
       },
       data
     );
     setData(next);
-    setMonthlyForm(blankMonthly(worker.id, next, kind));
+    setMonthlyForm(blankMonthly(worker.id, next, workType.id));
     notify("作業を登録しました");
   }
 
@@ -210,16 +214,17 @@ export default function WorkerInputPage() {
 
         {message ? <div className="mb-4 rounded-md bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">{message}</div> : null}
 
-        <div className="mb-4 grid grid-cols-3 gap-2">
+        <div className="mb-4 grid grid-cols-2 gap-2">
           <WorkerChoice active={workKind === "sorting"} onClick={() => switchKind("sorting")} label="仕訳作業" />
-          <WorkerChoice active={workKind === "submitted-documents"} onClick={() => switchKind("submitted-documents")} label="提出書類" />
-          <WorkerChoice active={workKind === "office-work"} onClick={() => switchKind("office-work")} label="その他事務" />
+          {data.workTypes.filter((workType) => workType.active).map((workType) => (
+            <WorkerChoice key={workType.id} active={workKind === workType.id} onClick={() => switchKind(workType.id)} label={workType.name} />
+          ))}
         </div>
 
         {workKind === "sorting" ? (
           <form className="space-y-4" onSubmit={submitSorting}>
             <WorkerDateField value={sortingForm.workDate} onChange={(value) => setSortingForm({ ...sortingForm, workDate: value })} />
-            <ReadonlyField label="担当者名" value={worker.name} />
+            <ReadonlyField label="担当者名" value={`${worker.code} ${worker.name}`} />
             <WorkerSelect label="顧問先" value={sortingForm.clientId} onChange={(value) => setSortingForm({ ...sortingForm, clientId: value })} options={data.clients.filter((client) => client.active).map((client) => ({ value: client.id, label: client.name }))} />
             <WorkerNumberField label="総仕訳数" value={sortingCountState.inputs.totalSortingCount} onChange={(value) => updateSortingCount("totalSortingCount", value)} auto={sortingCountState.autoField === "totalSortingCount"} help={<SortingHelp previousTotal={previousTotal} currentTotal={sortingForm.totalSortingCount} />} />
             <WorkerNumberField label="手入力件数" value={sortingCountState.inputs.manualCount} onChange={(value) => updateSortingCount("manualCount", value)} auto={sortingCountState.autoField === "manualCount"} />
@@ -231,9 +236,9 @@ export default function WorkerInputPage() {
         ) : (
           <form className="space-y-4" onSubmit={submitMonthly}>
             <WorkerDateField value={monthlyForm.workDate} onChange={(value) => setMonthlyForm({ ...monthlyForm, workDate: value })} />
-            <ReadonlyField label="担当者名" value={worker.name} />
+            <ReadonlyField label="担当者名" value={`${worker.code} ${worker.name}`} />
             <WorkerSelect label="顧問先" value={monthlyForm.clientId} onChange={(value) => setMonthlyForm({ ...monthlyForm, clientId: value })} options={data.clients.filter((client) => client.active).map((client) => ({ value: client.id, label: client.name }))} />
-            {workKind === "submitted-documents" ? <PlainNumberField label="書類数" value={monthlyForm.documentCount} onChange={(value) => setMonthlyForm({ ...monthlyForm, documentCount: value })} /> : <PlainNumberField label="作業時間（分）" value={monthlyForm.workMinutes} onChange={(value) => setMonthlyForm({ ...monthlyForm, workMinutes: value })} />}
+            {selectedWorkType?.unit === "count" ? <PlainNumberField label="数量" value={monthlyForm.documentCount} onChange={(value) => setMonthlyForm({ ...monthlyForm, documentCount: value })} /> : <PlainNumberField label="作業時間（分）" value={monthlyForm.workMinutes} onChange={(value) => setMonthlyForm({ ...monthlyForm, workMinutes: value })} />}
             <WorkerMemo value={monthlyForm.memo} onChange={(value) => setMonthlyForm({ ...monthlyForm, memo: value })} />
             <WorkerSubmit />
           </form>

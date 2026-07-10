@@ -3,13 +3,13 @@ import type { AppData, PaymentStatementSettings, SortingUnitPrice, UnitPrice, Wo
 const today = new Date().toISOString();
 
 export const defaultWorkTypes: WorkType[] = [
-  { id: "submitted-documents", name: "提出書類", unit: "count", active: true, createdAt: today },
-  { id: "office-work", name: "その他事務業務", unit: "time", active: true, createdAt: today }
+  { id: "submitted-documents", code: "T001", name: "提出書類", unit: "count", active: true, createdAt: today },
+  { id: "office-work", code: "T002", name: "その他事務業務", unit: "time", active: true, createdAt: today }
 ];
 
 export const defaultUnitPrices: UnitPrice[] = [
-  { workTypeId: "submitted-documents", amount: 3000, costAmount: 0, quantity: 1, unitLabel: "1件あたり", createdAt: today, updatedAt: today },
-  { workTypeId: "office-work", amount: 500, costAmount: 0, quantity: 10, unitLabel: "10分あたり", createdAt: today, updatedAt: today }
+  { workTypeId: "submitted-documents", amount: 3000, costAmount: 0, outsourceAmount: 1000, quantity: 1, unitLabel: "1件あたり", createdAt: today, updatedAt: today },
+  { workTypeId: "office-work", amount: 500, costAmount: 0, outsourceAmount: 300, quantity: 10, unitLabel: "10分あたり", createdAt: today, updatedAt: today }
 ];
 
 export const defaultSortingUnitPrices: SortingUnitPrice[] = [
@@ -45,9 +45,9 @@ export const defaultPaymentStatementSettings: PaymentStatementSettings = {
 
 export const sampleData: AppData = {
   workers: [
-    { id: "worker-a", name: "佐藤 花子", active: true, createdAt: today },
-    { id: "worker-b", name: "鈴木 一郎", active: true, createdAt: today },
-    { id: "worker-c", name: "田中 美咲", active: true, createdAt: today }
+    { id: "worker-a", code: "W001", name: "佐藤 花子", active: true, createdAt: today },
+    { id: "worker-b", code: "W002", name: "鈴木 一郎", active: true, createdAt: today },
+    { id: "worker-c", code: "W003", name: "田中 美咲", active: true, createdAt: today }
   ],
   clients: [
     { id: "client-a", name: "青山商事", code: "A001", active: true, createdAt: today },
@@ -105,9 +105,9 @@ export const sampleData: AppData = {
   unitPrices: defaultUnitPrices,
   sortingUnitPrices: defaultSortingUnitPrices,
   workerOutsourcePrices: defaultWorkerOutsourcePrices([
-    { id: "worker-a", name: "佐藤 花子", active: true, createdAt: today },
-    { id: "worker-b", name: "鈴木 一郎", active: true, createdAt: today },
-    { id: "worker-c", name: "田中 美咲", active: true, createdAt: today }
+    { id: "worker-a", code: "W001", name: "佐藤 花子", active: true, createdAt: today },
+    { id: "worker-b", code: "W002", name: "鈴木 一郎", active: true, createdAt: today },
+    { id: "worker-c", code: "W003", name: "田中 美咲", active: true, createdAt: today }
   ]),
   workerShareLinks: [],
   paymentStatementSettings: defaultPaymentStatementSettings,
