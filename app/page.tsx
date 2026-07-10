@@ -82,7 +82,7 @@ import type {
 type MainTab = "input" | "summary" | "outsource" | "more";
 type MoreTab = "home" | "list" | "billing" | "backup" | "settings";
 type WorkKind = "sorting" | "submitted-documents" | "office-work";
-type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement" | "backup";
+type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement";
 
 type BackupPreview = {
   fileName: string;
@@ -863,13 +863,12 @@ function SettingsPanel(props: {
   return (
     <section className="space-y-6">
       <div className="panel p-4">
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <ChoiceButton active={props.settingsTab === "clients"} onClick={() => props.setSettingsTab("clients")} label="顧問先設定" />
           <ChoiceButton active={props.settingsTab === "workers"} onClick={() => props.setSettingsTab("workers")} label="担当者設定" />
           <ChoiceButton active={props.settingsTab === "workTypes"} onClick={() => props.setSettingsTab("workTypes")} label="作業種別設定" />
           <ChoiceButton active={props.settingsTab === "prices"} onClick={() => props.setSettingsTab("prices")} label="単価設定" />
           <ChoiceButton active={props.settingsTab === "paymentStatement"} onClick={() => props.setSettingsTab("paymentStatement")} label="支払明細書設定" />
-          <ChoiceButton active={props.settingsTab === "backup"} onClick={() => props.setSettingsTab("backup")} label="バックアップ管理" />
         </div>
       </div>
       {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} remove={props.removeClient} /> : null}
@@ -877,17 +876,6 @@ function SettingsPanel(props: {
       {props.settingsTab === "workTypes" ? <WorkTypeSettings workTypes={props.data.workTypes} /> : null}
       {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} /> : null}
       {props.settingsTab === "paymentStatement" ? <PaymentStatementSettingsPanel form={props.paymentSettingsForm} setForm={props.setPaymentSettingsForm} submit={props.submitPaymentSettings} /> : null}
-      {props.settingsTab === "backup" ? (
-        <BackupSettingsPanel
-          data={props.data}
-          month={props.month}
-          recentLocalBackups={props.recentLocalBackups}
-          backupPreview={props.backupPreview}
-          exportBackup={props.exportBackup}
-          exportBackupCsv={props.exportBackupCsv}
-          previewBackupFile={props.previewBackupFile}
-        />
-      ) : null}
     </section>
   );
 }
