@@ -80,7 +80,7 @@ import type {
 } from "@/lib/types";
 
 type MainTab = "input" | "summary" | "outsource" | "more";
-type MoreTab = "home" | "list" | "billing" | "settings";
+type MoreTab = "home" | "list" | "billing" | "backup" | "settings";
 type WorkKind = "sorting" | "submitted-documents" | "office-work";
 type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement" | "backup";
 
@@ -622,16 +622,28 @@ export default function Home() {
         {mainTab === "more" ? (
           <section className="space-y-6">
             <div className="panel p-4">
-              <div className="grid gap-2 sm:grid-cols-4">
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                 <ChoiceButton active={moreTab === "home"} onClick={() => setMoreTab("home")} label="ホーム" />
                 <ChoiceButton active={moreTab === "list"} onClick={() => setMoreTab("list")} label="作業一覧" />
                 <ChoiceButton active={moreTab === "billing"} onClick={() => setMoreTab("billing")} label="顧問先別請求・採算" />
+                <ChoiceButton active={moreTab === "backup"} onClick={() => setMoreTab("backup")} label="バックアップ管理" />
                 <ChoiceButton active={moreTab === "settings"} onClick={() => setMoreTab("settings")} label="設定" />
               </div>
             </div>
             {moreTab === "home" ? <HomePanel month={month} setMonth={setMonth} profitability={profitability} sortingSummary={sortingSummary} monthlySummary={monthlySummary} rows={allWork.slice(0, 8)} /> : null}
             {moreTab === "list" ? <WorkListPanel month={month} setMonth={setMonth} data={data} workers={workers} clients={clients} workTypes={workTypes} monthlySortingReports={monthlySortingReports} monthlySummary={monthlySummary} editSorting={editSorting} editMonthly={editMonthly} removeSorting={(id) => deleteReport(id, data).then(setData)} removeMonthly={(id) => deleteMonthlyWorkReport(id, data).then(setData)} exportCsv={exportCsv} /> : null}
             {moreTab === "billing" ? <BillingPanel month={month} setMonth={setMonth} rows={clientProfitability} exportCsv={() => exportCsv(() => downloadClientBillingCsv(month, clientProfitability))} /> : null}
+            {moreTab === "backup" ? (
+              <BackupSettingsPanel
+                data={data}
+                month={month}
+                recentLocalBackups={recentLocalBackups}
+                backupPreview={backupPreview}
+                exportBackup={exportBackup}
+                exportBackupCsv={exportBackupCsv}
+                previewBackupFile={previewBackupFile}
+              />
+            ) : null}
             {moreTab === "settings" ? (
               <SettingsPanel
                 settingsTab={settingsTab}
