@@ -139,6 +139,7 @@ export type SummaryRow = {
   clientId: string;
   clientName: string;
   manualCount: number;
+  manualFreeAppliedCount: number;
   manualBillableCount: number;
   smartImportCount: number;
   smartBillableCount: number;
@@ -152,6 +153,7 @@ export type ClientSummaryRow = {
   clientName: string;
   manualCount: number;
   manualFreeCount: number;
+  manualFreeAppliedCount: number;
   manualBillableCount: number;
   manualRevenueUnitPrice: number;
   manualRevenue: number;

@@ -89,32 +89,54 @@ function workerOutsourcePrice(data: AppData, workerId: string): WorkerOutsourceP
   );
 }
 
+export function calculateSortingBillableCounts(manualCount: number, smartImportCount: number, freeLimit = FREE_MANUAL_ALLOWANCE) {
+  const manualFreeUsed = Math.min(manualCount, freeLimit);
+  const manualBillable = Math.max(manualCount - freeLimit, 0);
+  const remainingFreeLimit = Math.max(freeLimit - manualCount, 0);
+  const smartFreeUsed = Math.min(smartImportCount, remainingFreeLimit);
+  const smartBillable = Math.max(smartImportCount - remainingFreeLimit, 0);
+
+  return { manualFreeUsed, manualBillable, smartFreeUsed, smartBillable };
+}
+
 function allocateSortingBillable(reports: DailyReport[]) {
-  const remainingFreeByClient = new Map<string, number>();
+  const reportsByClient = new Map<string, DailyReport[]>();
+  const manualFreeByReport = new Map<string, number>();
   const manualBillableByReport = new Map<string, number>();
   const smartBillableByReport = new Map<string, number>();
   const smartFreeByReport = new Map<string, number>();
 
-  reports
-    .slice()
-    .sort((a, b) => `${a.clientId}-${a.workDate}-${a.createdAt}`.localeCompare(`${b.clientId}-${b.workDate}-${b.createdAt}`))
-    .forEach((report) => {
-      const remainingFree = remainingFreeByClient.get(report.clientId) ?? FREE_MANUAL_ALLOWANCE;
+  reports.forEach((report) => {
+    const clientReports = reportsByClient.get(report.clientId) ?? [];
+    clientReports.push(report);
+    reportsByClient.set(report.clientId, clientReports);
+  });
+
+  reportsByClient.forEach((clientReports) => {
+    const sortedReports = clientReports.slice().sort((a, b) => `${a.workDate}-${a.createdAt}-${a.id}`.localeCompare(`${b.workDate}-${b.createdAt}-${b.id}`));
+    let remainingFree = FREE_MANUAL_ALLOWANCE;
+
+    sortedReports.forEach((report) => {
       const manualFreeUsed = Math.min(remainingFree, report.manualCount);
-      const remainingAfterManual = Math.max(remainingFree - manualFreeUsed, 0);
-      const smartFreeUsed = Math.min(remainingAfterManual, report.smartImportCount);
+      manualFreeByReport.set(report.id, manualFreeUsed);
       manualBillableByReport.set(report.id, Math.max(report.manualCount - manualFreeUsed, 0));
-      smartBillableByReport.set(report.id, Math.max(report.smartImportCount - smartFreeUsed, 0));
-      smartFreeByReport.set(report.id, smartFreeUsed);
-      remainingFreeByClient.set(report.clientId, Math.max(remainingAfterManual - smartFreeUsed, 0));
+      remainingFree = Math.max(remainingFree - manualFreeUsed, 0);
     });
 
-  return { manualBillableByReport, smartBillableByReport, smartFreeByReport };
+    sortedReports.forEach((report) => {
+      const smartFreeUsed = Math.min(remainingFree, report.smartImportCount);
+      smartFreeByReport.set(report.id, smartFreeUsed);
+      smartBillableByReport.set(report.id, Math.max(report.smartImportCount - smartFreeUsed, 0));
+      remainingFree = Math.max(remainingFree - smartFreeUsed, 0);
+    });
+  });
+
+  return { manualFreeByReport, manualBillableByReport, smartBillableByReport, smartFreeByReport };
 }
 
 export function buildMonthlySummary(data: AppData, month: string) {
   const monthlyReports = data.reports.filter((report) => report.workMonth === month);
-  const { manualBillableByReport, smartBillableByReport, smartFreeByReport } = allocateSortingBillable(monthlyReports);
+  const { manualFreeByReport, manualBillableByReport, smartBillableByReport, smartFreeByReport } = allocateSortingBillable(monthlyReports);
   const workerNames = new Map(data.workers.map((worker) => [worker.id, worker.name]));
   const clientNames = new Map(data.clients.map((client) => [client.id, client.name]));
   const manualPrice = data.sortingUnitPrices.find((price) => price.id === "manual") ?? { amount: 60, costAmount: 40 };
@@ -133,6 +155,7 @@ export function buildMonthlySummary(data: AppData, month: string) {
         clientId: report.clientId,
         clientName: clientNames.get(report.clientId) ?? "未設定",
         manualCount: 0,
+        manualFreeAppliedCount: 0,
         manualBillableCount: 0,
         smartImportCount: 0,
         smartBillableCount: 0,
@@ -140,10 +163,12 @@ export function buildMonthlySummary(data: AppData, month: string) {
         invoiceTargetCount: 0,
         autoWorkCount: 0
       };
+    const manualFreeApplied = manualFreeByReport.get(report.id) ?? 0;
     const billable = manualBillableByReport.get(report.id) ?? 0;
     const smartBillable = smartBillableByReport.get(report.id) ?? report.smartImportCount;
     const smartFreeApplied = smartFreeByReport.get(report.id) ?? 0;
     row.manualCount += report.manualCount;
+    row.manualFreeAppliedCount += manualFreeApplied;
     row.manualBillableCount += billable;
     row.smartImportCount += report.smartImportCount;
     row.smartBillableCount += smartBillable;
@@ -159,6 +184,7 @@ export function buildMonthlySummary(data: AppData, month: string) {
         clientName: clientNames.get(report.clientId) ?? "未設定",
         manualCount: 0,
         manualFreeCount: 0,
+        manualFreeAppliedCount: 0,
         manualBillableCount: 0,
         manualRevenueUnitPrice: manualPrice.amount,
         manualRevenue: 0,
@@ -181,11 +207,12 @@ export function buildMonthlySummary(data: AppData, month: string) {
       };
     const outsourcePrice = workerOutsourcePrice(data, report.workerId);
     clientRow.manualCount += report.manualCount;
+    clientRow.manualFreeAppliedCount += manualFreeApplied;
     clientRow.manualBillableCount += billable;
-    clientRow.manualFreeCount = Math.min(clientRow.manualCount, FREE_MANUAL_ALLOWANCE);
     clientRow.smartImportCount += report.smartImportCount;
     clientRow.smartBillableCount += smartBillable;
     clientRow.smartFreeAppliedCount += smartFreeApplied;
+    clientRow.manualFreeCount = clientRow.manualFreeAppliedCount + clientRow.smartFreeAppliedCount;
     clientRow.invoiceTargetCount = clientRow.manualBillableCount + clientRow.smartBillableCount;
     clientRow.manualRevenue = clientRow.manualBillableCount * manualPrice.amount;
     clientRow.manualCost = clientRow.manualCount * manualPrice.costAmount;

@@ -136,24 +136,38 @@ function displayMemo(memo: string) {
 }
 
 function sortingBillableForReport(reports: DailyReport[], target: DailyReport) {
-  let remainingFree = FREE_MANUAL_ALLOWANCE;
-  let result = { manualBillable: 0, smartBillable: target.smartImportCount, smartFreeApplied: 0 };
-  reports
+  let result = { manualFreeApplied: 0, manualBillable: target.manualCount, smartBillable: target.smartImportCount, smartFreeApplied: 0 };
+  const sortedReports = reports
     .filter((report) => report.clientId === target.clientId)
     .slice()
-    .sort((a, b) => `${a.workDate}-${a.createdAt}-${a.id}`.localeCompare(`${b.workDate}-${b.createdAt}-${b.id}`))
-    .forEach((report) => {
-      const manualFreeUsed = Math.min(remainingFree, report.manualCount);
-      const remainingAfterManual = Math.max(remainingFree - manualFreeUsed, 0);
-      const smartFreeUsed = Math.min(remainingAfterManual, report.smartImportCount);
-      const allocation = {
-        manualBillable: Math.max(report.manualCount - manualFreeUsed, 0),
-        smartBillable: Math.max(report.smartImportCount - smartFreeUsed, 0),
-        smartFreeApplied: smartFreeUsed
-      };
-      if (report.id === target.id) result = allocation;
-      remainingFree = Math.max(remainingAfterManual - smartFreeUsed, 0);
+    .sort((a, b) => `${a.workDate}-${a.createdAt}-${a.id}`.localeCompare(`${b.workDate}-${b.createdAt}-${b.id}`));
+  const allocationByReport = new Map<string, typeof result>();
+  let remainingFree = FREE_MANUAL_ALLOWANCE;
+
+  sortedReports.forEach((report) => {
+    const manualFreeApplied = Math.min(remainingFree, report.manualCount);
+    allocationByReport.set(report.id, {
+      manualFreeApplied,
+      manualBillable: Math.max(report.manualCount - manualFreeApplied, 0),
+      smartBillable: report.smartImportCount,
+      smartFreeApplied: 0
     });
+    remainingFree = Math.max(remainingFree - manualFreeApplied, 0);
+  });
+
+  sortedReports.forEach((report) => {
+    const current = allocationByReport.get(report.id);
+    if (!current) return;
+    const smartFreeApplied = Math.min(remainingFree, report.smartImportCount);
+    allocationByReport.set(report.id, {
+      ...current,
+      smartBillable: Math.max(report.smartImportCount - smartFreeApplied, 0),
+      smartFreeApplied
+    });
+    remainingFree = Math.max(remainingFree - smartFreeApplied, 0);
+  });
+
+  result = allocationByReport.get(target.id) ?? result;
   return result;
 }
 
@@ -436,6 +450,7 @@ export default function Home() {
       ["今回総仕訳数", `${formatNumber(sortingForm.totalSortingCount)}件`],
       ["今回作業件数", `${formatNumber(workCount)}件`],
       ["手入力件数", `${formatNumber(sortingForm.manualCount)}件`],
+      ["手入力控除件数", `${formatNumber(allocation.manualFreeApplied)}件`],
       ["手入力請求対象件数", `${formatNumber(allocation.manualBillable)}件`],
       ["スマート取込件数", `${formatNumber(sortingForm.smartImportCount)}件`],
       ["スマート取込請求対象件数", `${formatNumber(allocation.smartBillable)}件`],
@@ -1076,7 +1091,7 @@ function SummaryCards({ sortingSummary, monthlySummary }: { sortingSummary: Retu
 
 function SortingSummaryTable({ rows }: { rows: ReturnType<typeof buildMonthlySummary>["clientRows"] }) {
   if (!rows.length) return <Empty text="仕訳集計がありません。" />;
-  return <section className="panel overflow-hidden"><PanelTitle title="仕訳日報集計" /><div className="overflow-x-auto"><table className="w-full min-w-[1040px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力実件数</th><th className="px-4 py-3 text-right">手入力請求対象</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">スマート取込請求対象</th><th className="px-4 py-3 text-right">スマート取込控除</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{rows.map((row) => <tr key={row.clientId}><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell text-right">{formatNumber(row.manualCount)}</td><td className="table-cell text-right">{formatNumber(row.manualBillableCount)}</td><td className="table-cell text-right">{formatNumber(row.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(row.smartBillableCount)}</td><td className="table-cell text-right">{formatNumber(row.smartFreeAppliedCount)}</td><td className="table-cell text-right">{formatCurrency(row.sortingRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.sortingOutsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.sortingRevenue - row.sortingOutsourceCost)}</td></tr>)}</tbody></table></div></section>;
+  return <section className="panel overflow-hidden"><PanelTitle title="仕訳日報集計" /><div className="overflow-x-auto"><table className="w-full min-w-[1120px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力実件数</th><th className="px-4 py-3 text-right">手入力控除</th><th className="px-4 py-3 text-right">手入力請求対象</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">スマート取込控除</th><th className="px-4 py-3 text-right">スマート取込請求対象</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{rows.map((row) => <tr key={row.clientId}><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell text-right">{formatNumber(row.manualCount)}</td><td className="table-cell text-right">{formatNumber(row.manualFreeAppliedCount)}</td><td className="table-cell text-right">{formatNumber(row.manualBillableCount)}</td><td className="table-cell text-right">{formatNumber(row.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(row.smartFreeAppliedCount)}</td><td className="table-cell text-right">{formatNumber(row.smartBillableCount)}</td><td className="table-cell text-right">{formatCurrency(row.sortingRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.sortingOutsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.sortingRevenue - row.sortingOutsourceCost)}</td></tr>)}</tbody></table></div></section>;
 }
 
 function MonthlySummaryTable({ rows }: { rows: ReturnType<typeof buildMonthlyWorkSummary>["rows"] }) {
@@ -1094,7 +1109,7 @@ function BillingTable({ rows }: { rows: ReturnType<typeof buildClientProfitabili
 }
 
 function SortingDetail({ row }: { row: ReturnType<typeof buildMonthlySummary>["clientRows"][number] }) {
-  return <div className="border-t border-line p-5"><h3 className="font-bold">仕訳日報内訳</h3><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><Info label="手入力実件数" value={`${formatNumber(row.manualCount)}件`} /><Info label="手入力請求対象件数" value={`${formatNumber(row.manualBillableCount)}件`} /><Info label="無料枠" value={`${formatNumber(FREE_MANUAL_ALLOWANCE)}件`} /><Info label="スマート取込控除件数" value={`${formatNumber(row.smartFreeAppliedCount)}件`} /><Info label="手入力売上単価" value={`1件あたり${formatNumber(row.manualRevenueUnitPrice)}円`} /><Info label="手入力売上" value={formatCurrency(row.manualRevenue)} /><Info label="手入力外注単価" value={`1件あたり${formatNumber(row.manualCostUnitPrice)}円`} /><Info label="手入力外注費" value={formatCurrency(row.manualCost)} /><Info label="スマート取込件数" value={`${formatNumber(row.smartImportCount)}件`} /><Info label="スマート取込請求対象件数" value={`${formatNumber(row.smartBillableCount)}件`} /><Info label="スマート取込売上単価" value={`1件あたり${formatNumber(row.smartRevenueUnitPrice)}円`} /><Info label="スマート取込売上" value={formatCurrency(row.smartRevenue)} /><Info label="スマート取込外注単価" value={`1件あたり${formatNumber(row.smartCostUnitPrice)}円`} /><Info label="スマート取込外注費" value={formatCurrency(row.smartCost)} /></div></div>;
+  return <div className="border-t border-line p-5"><h3 className="font-bold">仕訳日報内訳</h3><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><Info label="手入力実件数" value={`${formatNumber(row.manualCount)}件`} /><Info label="手入力請求対象件数" value={`${formatNumber(row.manualBillableCount)}件`} /><Info label="無料枠" value={`${formatNumber(FREE_MANUAL_ALLOWANCE)}件`} /><Info label="手入力控除件数" value={`${formatNumber(row.manualFreeAppliedCount)}件`} /><Info label="手入力売上単価" value={`1件あたり${formatNumber(row.manualRevenueUnitPrice)}円`} /><Info label="手入力売上" value={formatCurrency(row.manualRevenue)} /><Info label="手入力外注単価" value={`1件あたり${formatNumber(row.manualCostUnitPrice)}円`} /><Info label="手入力外注費" value={formatCurrency(row.manualCost)} /><Info label="スマート取込件数" value={`${formatNumber(row.smartImportCount)}件`} /><Info label="スマート取込控除件数" value={`${formatNumber(row.smartFreeAppliedCount)}件`} /><Info label="スマート取込請求対象件数" value={`${formatNumber(row.smartBillableCount)}件`} /><Info label="スマート取込売上単価" value={`1件あたり${formatNumber(row.smartRevenueUnitPrice)}円`} /><Info label="スマート取込売上" value={formatCurrency(row.smartRevenue)} /><Info label="スマート取込外注単価" value={`1件あたり${formatNumber(row.smartCostUnitPrice)}円`} /><Info label="スマート取込外注費" value={formatCurrency(row.smartCost)} /></div></div>;
 }
 
 function OutsourcePaymentTable({ rows, selectedWorkerId, setSelectedWorkerId, onPrint }: { rows: WorkerOutsourceSummaryRow[]; selectedWorkerId: string; setSelectedWorkerId: (id: string) => void; onPrint: (row: WorkerOutsourceSummaryRow) => void }) {
