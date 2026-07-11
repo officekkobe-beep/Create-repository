@@ -120,6 +120,20 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "処理に失敗しました。";
 }
 
+type ConfirmKind = "sorting" | "monthly" | null;
+
+function amountByUnit(quantity: number, price: Pick<UnitPrice, "amount" | "quantity">) {
+  return Math.round((quantity / price.quantity) * price.amount);
+}
+
+function outsourceByUnit(quantity: number, price: Pick<UnitPrice, "outsourceAmount" | "quantity">) {
+  return Math.round((quantity / price.quantity) * price.outsourceAmount);
+}
+
+function displayMemo(memo: string) {
+  return memo.trim() || "なし";
+}
+
 const emptySettings: PaymentStatementSettings = {
   title: "支払明細書",
   issuerName: "",
@@ -211,6 +225,7 @@ export default function Home() {
   const [recentLocalBackups, setRecentLocalBackups] = useState<RecentLocalBackup[]>([]);
   const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null);
   const [message, setMessage] = useState("");
+  const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
 
   useEffect(() => {
     fetchData().then((result) => {
@@ -362,17 +377,90 @@ export default function Home() {
     return "";
   }
 
+  function sortingPreviewRows() {
+    const worker = data.workers.find((item) => item.id === sortingForm.workerId);
+    const client = data.clients.find((item) => item.id === sortingForm.clientId);
+    const previous = previousTotalSortingCount ?? 0;
+    const workCount = sortingForm.totalSortingCount - previous;
+    const report: DailyReport = {
+      id: editingSorting?.id ?? "__preview__",
+      workDate: sortingForm.workDate,
+      workMonth: monthFromDate(sortingForm.workDate),
+      workerId: sortingForm.workerId,
+      clientId: sortingForm.clientId,
+      manualCount: sortingForm.manualCount,
+      smartImportCount: sortingForm.smartImportCount,
+      totalSortingCount: sortingForm.totalSortingCount,
+      memo: sortingForm.memo,
+      source: sortingForm.source ?? "admin",
+      sourceWorkerId: sortingForm.sourceWorkerId ?? "",
+      createdAt: editingSorting?.createdAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    const before = buildMonthlySummary(data, report.workMonth).clientRows.find((row) => row.clientId === report.clientId);
+    const nextData = { ...data, reports: [...data.reports.filter((item) => item.id !== report.id), report] };
+    const after = buildMonthlySummary(nextData, report.workMonth).clientRows.find((row) => row.clientId === report.clientId);
+    const revenue = Math.max((after?.sortingRevenue ?? 0) - (before?.sortingRevenue ?? 0), 0);
+    const outsourceCost = Math.max((after?.sortingOutsourceCost ?? 0) - (before?.sortingOutsourceCost ?? 0), 0);
+    return [
+      ["作業日", sortingForm.workDate],
+      ["顧問先", client?.name ?? "未設定"],
+      ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
+      ["作業種別", "仕訳作業"],
+      ["前回総仕訳数", `${formatNumber(previous)}件${previousSorting ? "" : "（初回）"}`],
+      ["今回総仕訳数", `${formatNumber(sortingForm.totalSortingCount)}件`],
+      ["今回作業件数", `${formatNumber(workCount)}件`],
+      ["手入力件数", `${formatNumber(sortingForm.manualCount)}件`],
+      ["スマート取込件数", `${formatNumber(sortingForm.smartImportCount)}件`],
+      ["売上金額", formatCurrency(revenue)],
+      ["外注費", formatCurrency(outsourceCost)],
+      ["粗利", formatCurrency(revenue - outsourceCost)],
+      ["メモ", displayMemo(sortingForm.memo)]
+    ];
+  }
+
+  function monthlyPreviewRows() {
+    const worker = data.workers.find((item) => item.id === monthlyForm.workerId);
+    const client = data.clients.find((item) => item.id === monthlyForm.clientId);
+    const workType = data.workTypes.find((item) => item.id === monthlyForm.workTypeId);
+    const price = data.unitPrices.find((item) => item.workTypeId === monthlyForm.workTypeId) ?? { amount: 0, outsourceAmount: 0, quantity: workType?.unit === "time" ? 10 : 1, unitLabel: "" };
+    const quantity = workType?.unit === "time" ? monthlyForm.workMinutes : monthlyForm.documentCount;
+    const revenue = amountByUnit(quantity, price);
+    const outsourceCost = outsourceByUnit(quantity, price);
+    return [
+      ["作業日", monthlyForm.workDate],
+      ["顧問先", client?.name ?? "未設定"],
+      ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
+      ["作業種別", workType?.name ?? "未設定"],
+      ["作業種別コード", workType?.code ?? "未設定"],
+      ["作業種別名", workType?.name ?? "未設定"],
+      ["単位", workType ? unitLabel(workType) : "未設定"],
+      [workType?.unit === "time" ? "作業時間" : "数量", workType?.unit === "time" ? `${formatNumber(monthlyForm.workMinutes)}分` : `${formatNumber(monthlyForm.documentCount)}件`],
+      ["売上単価", `${workType?.unit === "time" ? "10分あたり" : "1件あたり"}${formatNumber(price.amount)}円`],
+      ["外注単価", `${workType?.unit === "time" ? "10分あたり" : "1件あたり"}${formatNumber(price.outsourceAmount)}円`],
+      ["売上金額", formatCurrency(revenue)],
+      ["外注費", formatCurrency(outsourceCost)],
+      ["粗利", formatCurrency(revenue - outsourceCost)],
+      ["メモ", displayMemo(monthlyForm.memo)]
+    ];
+  }
+
   async function submitSorting(event: FormEvent) {
     event.preventDefault();
     if (!sortingForm.workerId || !sortingForm.clientId) return notify("担当者と顧問先を選択してください。");
     const countError = validateSortingCounts();
     if (countError) return notify(countError);
+    setConfirmKind("sorting");
+  }
+
+  async function confirmSaveSorting() {
     const next = await upsertReport({ ...sortingForm, id: editingSorting?.id }, data);
     setData(next);
     refreshRecentBackups(next, editingSorting ? next.reports.find((report) => report.id === editingSorting.id) : latestByUpdatedAt(next.reports));
     setEditingSorting(null);
     setSortingForm(blankSorting(next));
     setSortingCountState(emptySortingCountState());
+    setConfirmKind(null);
     notify("仕訳作業を保存しました。");
   }
 
@@ -384,6 +472,13 @@ export default function Home() {
     if (!workType) return notify("作業種別を選択してください。");
     if (workType.unit === "count" && monthlyForm.documentCount <= 0) return notify("数量を入力してください。");
     if (workType.unit === "time" && monthlyForm.workMinutes <= 0) return notify("作業時間（分）を入力してください。");
+    setConfirmKind("monthly");
+  }
+
+  async function confirmSaveMonthly() {
+    const kind = monthlyForm.workTypeId;
+    const workType = data.workTypes.find((item) => item.id === kind);
+    if (!workType) return notify("作業種別を選択してください。");
     const next = await upsertMonthlyWorkReport(
       {
         ...monthlyForm,
@@ -398,6 +493,7 @@ export default function Home() {
     refreshRecentBackups(next, editingMonthly ? next.monthlyWorkReports.find((report) => report.id === editingMonthly.id) : latestByUpdatedAt(next.monthlyWorkReports));
     setEditingMonthly(null);
     setMonthlyForm(blankMonthly(next, kind));
+    setConfirmKind(null);
     notify("作業を保存しました。");
   }
 
@@ -801,6 +897,13 @@ export default function Home() {
           </section>
         ) : null}
       </div>
+      {confirmKind ? (
+        <ConfirmModal
+          rows={confirmKind === "sorting" ? sortingPreviewRows() : monthlyPreviewRows()}
+          onCancel={() => setConfirmKind(null)}
+          onConfirm={confirmKind === "sorting" ? confirmSaveSorting : confirmSaveMonthly}
+        />
+      ) : null}
     </main>
   );
 }
@@ -862,6 +965,35 @@ function MemoField({ value, onChange }: { value: string; onChange: (value: strin
 
 function SubmitRow({ label }: { label: string }) {
   return <div className="lg:col-span-2"><button className="button-primary" type="submit">{label}</button></div>;
+}
+
+function ConfirmModal({ rows, onCancel, onConfirm }: { rows: string[][]; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 py-6">
+      <section className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-soft">
+        <div className="border-b border-line px-5 py-4">
+          <h2 className="text-xl font-bold">入力内容の確認</h2>
+          <p className="mt-1 text-sm text-slate-500">内容を確認し、問題なければ保存してください。</p>
+        </div>
+        <div className="max-h-[62vh] overflow-y-auto p-5">
+          <table className="w-full border-collapse text-sm">
+            <tbody>
+              {rows.map(([label, value]) => (
+                <tr key={label} className="border-b border-line last:border-b-0">
+                  <th className="w-40 bg-slate-50 px-3 py-3 text-left font-bold text-slate-600">{label}</th>
+                  <td className="px-3 py-3 font-semibold text-ink">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex flex-col-reverse gap-2 border-t border-line px-5 py-4 sm:flex-row sm:justify-end">
+          <button className="button-secondary" type="button" onClick={onCancel}>修正する</button>
+          <button className="button-primary" type="button" onClick={onConfirm}>この内容で保存</button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function MonthHeader({ title, description, month, setMonth, action }: { title: string; description: string; month: string; setMonth: (month: string) => void; action?: React.ReactNode }) {

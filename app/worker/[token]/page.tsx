@@ -16,6 +16,7 @@ import { fetchData, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage"
 import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
 
 type WorkKind = "sorting" | string;
+type ConfirmKind = "sorting" | "monthly" | null;
 
 const emptyData: AppData = {
   workers: [],
@@ -44,6 +45,10 @@ const emptyData: AppData = {
 
 function todayDate() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function displayMemo(memo: string) {
+  return memo.trim() || "なし";
 }
 
 function blankSorting(workerId: string, data: AppData): ReportInput {
@@ -86,6 +91,7 @@ export default function WorkerInputPage() {
   const [sortingForm, setSortingForm] = useState<ReportInput>(blankSorting("", emptyData));
   const [monthlyForm, setMonthlyForm] = useState<MonthlyWorkReportInput>(blankMonthly("", emptyData, "sorting"));
   const [sortingCountState, setSortingCountState] = useState<SortingCountState>(emptySortingCountState());
+  const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
 
   useEffect(() => {
     fetchData().then((result) => {
@@ -169,10 +175,16 @@ export default function WorkerInputPage() {
     if (!sortingForm.clientId) return notify("顧問先を選択してください");
     const error = validateSorting();
     if (error) return notify(error);
+    setConfirmKind("sorting");
+  }
+
+  async function confirmSaveSorting() {
+    if (!worker) return;
     const next = await upsertReport({ ...sortingForm, workerId: worker.id, source: "worker_link", sourceWorkerId: worker.id }, data);
     setData(next);
     setSortingForm(blankSorting(worker.id, next));
     setSortingCountState(emptySortingCountState());
+    setConfirmKind(null);
     notify("作業を登録しました");
   }
 
@@ -184,6 +196,13 @@ export default function WorkerInputPage() {
     if (!monthlyForm.clientId) return notify("顧問先を選択してください");
     if (workType.unit === "count" && monthlyForm.documentCount <= 0) return notify("数量を入力してください");
     if (workType.unit === "time" && monthlyForm.workMinutes <= 0) return notify("作業時間（分）を入力してください");
+    setConfirmKind("monthly");
+  }
+
+  async function confirmSaveMonthly() {
+    if (!worker) return;
+    const workType = data.workTypes.find((item) => item.id === workKind);
+    if (!workType) return notify("作業種別を選択してください");
     const next = await upsertMonthlyWorkReport(
       {
         ...monthlyForm,
@@ -198,7 +217,35 @@ export default function WorkerInputPage() {
     );
     setData(next);
     setMonthlyForm(blankMonthly(worker.id, next, workType.id));
+    setConfirmKind(null);
     notify("作業を登録しました");
+  }
+
+  function sortingPreviewRows() {
+    const client = data.clients.find((item) => item.id === sortingForm.clientId);
+    return [
+      ["作業日", sortingForm.workDate],
+      ["顧問先", client?.name ?? "未設定"],
+      ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
+      ["作業種別", "仕訳作業"],
+      ["今回総仕訳数", `${formatNumber(sortingForm.totalSortingCount)}件`],
+      ["手入力件数", `${formatNumber(sortingForm.manualCount)}件`],
+      ["スマート取込件数", `${formatNumber(sortingForm.smartImportCount)}件`],
+      ["メモ", displayMemo(sortingForm.memo)]
+    ];
+  }
+
+  function monthlyPreviewRows() {
+    const client = data.clients.find((item) => item.id === monthlyForm.clientId);
+    const workType = data.workTypes.find((item) => item.id === monthlyForm.workTypeId);
+    return [
+      ["作業日", monthlyForm.workDate],
+      ["顧問先", client?.name ?? "未設定"],
+      ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
+      ["作業種別", workType?.name ?? "未設定"],
+      [workType?.unit === "time" ? "作業時間" : "数量", workType?.unit === "time" ? `${formatNumber(monthlyForm.workMinutes)}分` : `${formatNumber(monthlyForm.documentCount)}件`],
+      ["メモ", displayMemo(monthlyForm.memo)]
+    ];
   }
 
   if (loading) return <main className="min-h-screen bg-slate-50 p-5"><div className="mx-auto max-w-md rounded-lg bg-white p-5 text-sm text-slate-600 shadow-soft">読み込み中です。</div></main>;
@@ -244,6 +291,13 @@ export default function WorkerInputPage() {
           </form>
         )}
       </section>
+      {confirmKind ? (
+        <WorkerConfirmModal
+          rows={confirmKind === "sorting" ? sortingPreviewRows() : monthlyPreviewRows()}
+          onCancel={() => setConfirmKind(null)}
+          onConfirm={confirmKind === "sorting" ? confirmSaveSorting : confirmSaveMonthly}
+        />
+      ) : null}
     </main>
   );
 }
@@ -287,4 +341,33 @@ function WorkerMemo({ value, onChange }: { value: string; onChange: (value: stri
 
 function WorkerSubmit() {
   return <button className="w-full rounded-lg bg-brand px-4 py-4 text-base font-bold text-white shadow-sm" type="submit">保存</button>;
+}
+
+function WorkerConfirmModal({ rows, onCancel, onConfirm }: { rows: string[][]; onCancel: () => void; onConfirm: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 py-6">
+      <section className="max-h-[90vh] w-full max-w-md overflow-hidden rounded-xl bg-white shadow-soft">
+        <div className="border-b border-line px-5 py-4">
+          <h2 className="text-xl font-bold">入力内容の確認</h2>
+          <p className="mt-1 text-sm text-slate-500">内容を確認してから登録してください。</p>
+        </div>
+        <div className="max-h-[62vh] overflow-y-auto p-5">
+          <table className="w-full border-collapse text-sm">
+            <tbody>
+              {rows.map(([label, value]) => (
+                <tr key={label} className="border-b border-line last:border-b-0">
+                  <th className="w-32 bg-slate-50 px-3 py-3 text-left font-bold text-slate-600">{label}</th>
+                  <td className="px-3 py-3 font-semibold text-ink">{value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="grid gap-2 border-t border-line px-5 py-4">
+          <button className="button-primary w-full" type="button" onClick={onConfirm}>この内容で保存</button>
+          <button className="button-secondary w-full" type="button" onClick={onCancel}>修正する</button>
+        </div>
+      </section>
+    </div>
+  );
 }
