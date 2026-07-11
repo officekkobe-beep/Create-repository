@@ -141,6 +141,8 @@ export type SummaryRow = {
   manualCount: number;
   manualBillableCount: number;
   smartImportCount: number;
+  smartBillableCount: number;
+  smartFreeAppliedCount: number;
   invoiceTargetCount: number;
   autoWorkCount: number;
 };
@@ -156,6 +158,8 @@ export type ClientSummaryRow = {
   manualCostUnitPrice: number;
   manualCost: number;
   smartImportCount: number;
+  smartBillableCount: number;
+  smartFreeAppliedCount: number;
   smartRevenueUnitPrice: number;
   smartRevenue: number;
   smartCostUnitPrice: number;

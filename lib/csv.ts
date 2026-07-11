@@ -24,7 +24,7 @@ function grossRate(revenue: number, profit: number) {
 export function downloadSortingDailyReportCsv(month: string, reports: DailyReport[], data: AppData) {
   const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
-  const header = ["作業月", "作業日", "担当者", "顧問先", "手入力件数", "スマート取込件数", "総仕分け数", "メモ"];
+  const header = ["作業月", "作業日", "担当者", "顧問先", "手入力件数", "スマート取込件数", "総仕訳数", "メモ"];
   const lines = [
     header.map(escapeCell).join(","),
     ...reports.map((report) =>
@@ -37,7 +37,18 @@ export function downloadSortingDailyReportCsv(month: string, reports: DailyRepor
 }
 
 export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows: ClientSummaryRow[]) {
-  const workerHeader = ["月", "顧問先", "担当者", "手入力件数", "手入力請求件数", "スマート取込件数", "請求対象合計", "自動計算作業件数"];
+  const workerHeader = [
+    "月",
+    "顧問先",
+    "担当者",
+    "手入力実件数",
+    "手入力請求対象件数",
+    "スマート取込件数",
+    "スマート取込請求対象件数",
+    "スマート取込控除件数",
+    "請求対象合計",
+    "自動計算作業件数"
+  ];
   const clientHeader = [
     "月",
     "顧問先",
@@ -46,6 +57,8 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
     "手入力売上",
     "手入力原価",
     "スマート取込件数",
+    "スマート取込請求対象件数",
+    "スマート取込控除件数",
     "スマート取込売上",
     "スマート取込原価",
     "売上合計",
@@ -54,9 +67,24 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
     "粗利率"
   ];
   const lines = [
-    "担当者別・顧問先別集計",
+    "担当者・顧問先別集計",
     workerHeader.map(escapeCell).join(","),
-    ...rows.map((row) => [month, row.clientName, row.workerName, row.manualCount, row.manualBillableCount, row.smartImportCount, row.invoiceTargetCount, row.autoWorkCount].map(escapeCell).join(",")),
+    ...rows.map((row) =>
+      [
+        month,
+        row.clientName,
+        row.workerName,
+        row.manualCount,
+        row.manualBillableCount,
+        row.smartImportCount,
+        row.smartBillableCount,
+        row.smartFreeAppliedCount,
+        row.invoiceTargetCount,
+        row.autoWorkCount
+      ]
+        .map(escapeCell)
+        .join(",")
+    ),
     "",
     "顧問先別採算集計",
     clientHeader.map(escapeCell).join(","),
@@ -69,6 +97,8 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
         row.manualRevenue,
         row.manualCost,
         row.smartImportCount,
+        row.smartBillableCount,
+        row.smartFreeAppliedCount,
         row.smartRevenue,
         row.smartCost,
         row.sortingRevenue,
@@ -149,8 +179,13 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
     "外注費合計",
     "粗利",
     "粗利率",
+    "手入力実件数",
+    "手入力請求対象件数",
     "手入力売上",
     "手入力原価",
+    "スマート取込件数",
+    "スマート取込請求対象件数",
+    "スマート取込控除件数",
     "スマート取込売上",
     "スマート取込原価"
   ];
@@ -171,8 +206,13 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
         row.totalOutsourceCost,
         row.grossProfit,
         grossRate(row.totalRevenue, row.grossProfit),
+        row.sortingDetail?.manualCount ?? 0,
+        row.sortingDetail?.manualBillableCount ?? 0,
         row.sortingDetail?.manualRevenue ?? 0,
         row.sortingDetail?.manualCost ?? 0,
+        row.sortingDetail?.smartImportCount ?? 0,
+        row.sortingDetail?.smartBillableCount ?? 0,
+        row.sortingDetail?.smartFreeAppliedCount ?? 0,
         row.sortingDetail?.smartRevenue ?? 0,
         row.sortingDetail?.smartCost ?? 0
       ]
@@ -184,7 +224,19 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
 }
 
 export function downloadOutsourcePaymentSummaryCsv(month: string, rows: WorkerOutsourceSummaryRow[]) {
-  const header = ["対象月", "担当者", "手入力件数", "手入力外注費", "スマート取込件数", "スマート取込外注費", "提出書類件数", "提出書類外注費", "その他事務業務時間", "その他事務業務外注費", "支払合計"];
+  const header = [
+    "対象月",
+    "担当者",
+    "手入力件数",
+    "手入力外注費",
+    "スマート取込件数",
+    "スマート取込外注費",
+    "提出書類件数",
+    "提出書類外注費",
+    "その他事務業務時間",
+    "その他事務業務外注費",
+    "支払合計"
+  ];
   const lines = [
     header.map(escapeCell).join(","),
     ...rows.map((row) =>
