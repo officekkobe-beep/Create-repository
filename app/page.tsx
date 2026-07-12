@@ -641,15 +641,16 @@ export default function Home() {
   }
 
   async function executeMonthlyReopen() {
-    if (reopenConfirmText !== "確定解除") return notify("確認文言に「確定解除」と入力してください。");
+    if (!reopenReason.trim()) return notify("解除理由を入力してください。");
+    if (reopenConfirmText.trim() !== "確定解除") return notify("確認文言に「確定解除」と入力してください。");
     try {
-      const next = await reopenMonth(month, reopenReason, data);
+      const next = await reopenMonth(month, reopenReason.trim(), data);
       setData(next);
       setReopenReason("");
       setReopenConfirmText("");
       notify("月次確定を解除しました。");
     } catch (error) {
-      notify(errorMessage(error));
+      notify(`確定解除に失敗しました。${errorMessage(error)} Supabaseの更新権限またはmonthly_closingsテーブルを確認してください。`);
     }
   }
 

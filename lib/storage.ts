@@ -717,7 +717,8 @@ async function insertAuditLog(current: AppData, log: Omit<AuditLog, "id" | "crea
   const supabase = supabaseClient();
   const record: AuditLog = { id: createId("audit"), createdAt: nowIso(), ...log };
   if (supabase) {
-    await supabase.from("audit_logs").insert(fromAuditLog(record));
+    const result = await supabase.from("audit_logs").insert(fromAuditLog(record));
+    if (result.error) throw new Error(`操作履歴の保存に失敗しました: ${result.error.message}`);
   }
   return { ...current, auditLogs: [record, ...current.auditLogs].slice(0, 100) };
 }
@@ -800,7 +801,10 @@ export async function closeMonth(targetMonth: string, current: AppData, totals: 
     updatedAt: nowIso()
   };
   const supabase = supabaseClient();
-  if (supabase) await supabase.from("monthly_closings").upsert(fromMonthlyClosing(record), { onConflict: "target_month" });
+  if (supabase) {
+    const result = await supabase.from("monthly_closings").upsert(fromMonthlyClosing(record), { onConflict: "target_month" });
+    if (result.error) throw new Error(`月次確定の保存に失敗しました: ${result.error.message}`);
+  }
   const nextClosing = { ...current, monthlyClosings: [record, ...current.monthlyClosings.filter((item) => item.targetMonth !== targetMonth)] };
   const next = await insertAuditLog(nextClosing, {
     actionType: "monthly_closed",
@@ -816,23 +820,37 @@ export async function closeMonth(targetMonth: string, current: AppData, totals: 
 }
 
 export async function reopenMonth(targetMonth: string, reason: string, current: AppData, reopenedBy = "admin") {
-  if (!reason.trim()) throw new Error("解除理由を入力してください。");
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) throw new Error("解除理由を入力してください。");
   const existing = current.monthlyClosings.find((item) => item.targetMonth === targetMonth);
   if (!existing) throw new Error("月次確定データが見つかりません。");
+  const timestamp = nowIso();
   const record: MonthlyClosing = {
     ...existing,
     isClosed: false,
-    reopenedAt: nowIso(),
+    reopenedAt: timestamp,
     reopenedBy,
-    reopenReason: reason.trim(),
-    updatedAt: nowIso()
+    reopenReason: trimmedReason,
+    updatedAt: timestamp
   };
   const supabase = supabaseClient();
-  if (supabase) await supabase.from("monthly_closings").upsert(fromMonthlyClosing(record), { onConflict: "target_month" });
+  if (supabase) {
+    const result = await supabase
+      .from("monthly_closings")
+      .update({
+        is_closed: false,
+        reopened_at: record.reopenedAt,
+        reopened_by: record.reopenedBy,
+        reopen_reason: record.reopenReason,
+        updated_at: record.updatedAt
+      })
+      .eq("target_month", targetMonth);
+    if (result.error) throw new Error(`monthly_closingsの更新に失敗しました: ${result.error.message}`);
+  }
   const nextClosing = { ...current, monthlyClosings: [record, ...current.monthlyClosings.filter((item) => item.targetMonth !== targetMonth)] };
   const next = await insertAuditLog(nextClosing, {
-    actionType: "monthly_reopened",
-    targetType: "monthly_closings",
+    actionType: "reopen_month",
+    targetType: "monthly_closing",
     targetId: record.id,
     targetMonth,
     message: `${targetMonth}の月次確定を解除しました。理由: ${record.reopenReason}`,

@@ -178,6 +178,12 @@ create table if not exists audit_logs (
   created_at timestamptz not null default now()
 );
 
+alter table monthly_closings add column if not exists is_closed boolean not null default false;
+alter table monthly_closings add column if not exists reopened_at timestamptz;
+alter table monthly_closings add column if not exists reopened_by text not null default '';
+alter table monthly_closings add column if not exists reopen_reason text not null default '';
+alter table monthly_closings add column if not exists updated_at timestamptz not null default now();
+
 create index if not exists daily_reports_work_month_idx on daily_reports(work_month);
 create index if not exists daily_reports_client_date_idx on daily_reports(client_id, work_date);
 create index if not exists daily_reports_worker_month_idx on daily_reports(worker_id, work_month);

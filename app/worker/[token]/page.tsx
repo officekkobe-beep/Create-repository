@@ -12,7 +12,7 @@ import {
   type SortingCountKey,
   type SortingCountState
 } from "@/lib/sorting-count";
-import { CLOSED_MONTH_MESSAGE, fetchData, isMonthClosed, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
+import { fetchData, isMonthClosed, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
 import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
 
 type WorkKind = "sorting" | string;
