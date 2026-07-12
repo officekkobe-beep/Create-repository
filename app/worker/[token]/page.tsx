@@ -12,7 +12,7 @@ import {
   type SortingCountKey,
   type SortingCountState
 } from "@/lib/sorting-count";
-import { fetchData, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
+import { CLOSED_MONTH_MESSAGE, fetchData, isMonthClosed, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
 import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
 
 type WorkKind = "sorting" | string;
@@ -40,7 +40,10 @@ const emptyData: AppData = {
     footerText: "",
     updatedAt: ""
   },
-  monthlyWorkReports: []
+  monthlyWorkReports: [],
+  monthlyClosings: [],
+  backupRecords: [],
+  auditLogs: []
 };
 
 function todayDate() {
@@ -172,6 +175,7 @@ export default function WorkerInputPage() {
   async function submitSorting(event: FormEvent) {
     event.preventDefault();
     if (!worker) return;
+    if (isMonthClosed(data, monthFromDate(sortingForm.workDate))) return notify("この月は月次確定済みのため、作業を登録できません。");
     if (!sortingForm.clientId) return notify("顧問先を選択してください");
     const error = validateSorting();
     if (error) return notify(error);
@@ -191,6 +195,7 @@ export default function WorkerInputPage() {
   async function submitMonthly(event: FormEvent) {
     event.preventDefault();
     if (!worker) return;
+    if (isMonthClosed(data, monthFromDate(monthlyForm.workDate))) return notify("この月は月次確定済みのため、作業を登録できません。");
     const workType = data.workTypes.find((item) => item.id === workKind);
     if (!workType) return notify("作業種別を選択してください");
     if (!monthlyForm.clientId) return notify("顧問先を選択してください");

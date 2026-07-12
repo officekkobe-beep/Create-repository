@@ -142,5 +142,8 @@ export const sampleData: AppData = {
       createdAt: today,
       updatedAt: today
     }
-  ]
+  ],
+  monthlyClosings: [],
+  backupRecords: [],
+  auditLogs: []
 };

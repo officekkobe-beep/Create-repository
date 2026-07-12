@@ -136,6 +136,48 @@ create table if not exists payment_statement_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists backup_records (
+  id text primary key,
+  backup_datetime timestamptz not null,
+  backup_type text not null check (backup_type in ('full_json', 'work_logs', 'settings')),
+  target_month text not null,
+  created_by text not null default 'admin',
+  file_name text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists monthly_closings (
+  id text primary key,
+  target_month text not null unique,
+  is_closed boolean not null default false,
+  closed_at timestamptz,
+  closed_by text not null default '',
+  closing_backup_id text references backup_records(id) on delete set null,
+  sales_total integer not null default 0 check (sales_total >= 0),
+  outsource_total integer not null default 0 check (outsource_total >= 0),
+  gross_profit integer not null default 0,
+  report_count integer not null default 0 check (report_count >= 0),
+  note text not null default '',
+  reopened_at timestamptz,
+  reopened_by text not null default '',
+  reopen_reason text not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists audit_logs (
+  id text primary key,
+  action_type text not null,
+  target_type text not null,
+  target_id text not null default '',
+  target_month text not null default '',
+  message text not null default '',
+  before_data jsonb,
+  after_data jsonb,
+  created_by text not null default 'system',
+  created_at timestamptz not null default now()
+);
+
 create index if not exists daily_reports_work_month_idx on daily_reports(work_month);
 create index if not exists daily_reports_client_date_idx on daily_reports(client_id, work_date);
 create index if not exists daily_reports_worker_month_idx on daily_reports(worker_id, work_month);
@@ -143,6 +185,9 @@ create index if not exists monthly_work_reports_work_month_idx on monthly_work_r
 create index if not exists monthly_work_reports_client_month_idx on monthly_work_reports(client_id, work_month);
 create index if not exists monthly_work_reports_type_month_idx on monthly_work_reports(work_type_id, work_month);
 create index if not exists worker_share_links_token_idx on worker_share_links(token);
+create index if not exists backup_records_target_month_idx on backup_records(target_month);
+create index if not exists monthly_closings_target_month_idx on monthly_closings(target_month);
+create index if not exists audit_logs_target_month_idx on audit_logs(target_month, created_at desc);
 
 do $$
 declare
@@ -230,6 +275,9 @@ alter table worker_outsource_prices enable row level security;
 alter table worker_share_links enable row level security;
 alter table monthly_work_reports enable row level security;
 alter table payment_statement_settings enable row level security;
+alter table backup_records enable row level security;
+alter table monthly_closings enable row level security;
+alter table audit_logs enable row level security;
 
 drop policy if exists "workers_select" on workers;
 drop policy if exists "workers_insert" on workers;
@@ -320,6 +368,33 @@ create policy "payment_statement_settings_select" on payment_statement_settings 
 create policy "payment_statement_settings_insert" on payment_statement_settings for insert with check (true);
 create policy "payment_statement_settings_update" on payment_statement_settings for update using (true) with check (true);
 create policy "payment_statement_settings_delete" on payment_statement_settings for delete using (true);
+
+drop policy if exists "backup_records_select" on backup_records;
+drop policy if exists "backup_records_insert" on backup_records;
+drop policy if exists "backup_records_update" on backup_records;
+drop policy if exists "backup_records_delete" on backup_records;
+create policy "backup_records_select" on backup_records for select using (true);
+create policy "backup_records_insert" on backup_records for insert with check (true);
+create policy "backup_records_update" on backup_records for update using (true) with check (true);
+create policy "backup_records_delete" on backup_records for delete using (true);
+
+drop policy if exists "monthly_closings_select" on monthly_closings;
+drop policy if exists "monthly_closings_insert" on monthly_closings;
+drop policy if exists "monthly_closings_update" on monthly_closings;
+drop policy if exists "monthly_closings_delete" on monthly_closings;
+create policy "monthly_closings_select" on monthly_closings for select using (true);
+create policy "monthly_closings_insert" on monthly_closings for insert with check (true);
+create policy "monthly_closings_update" on monthly_closings for update using (true) with check (true);
+create policy "monthly_closings_delete" on monthly_closings for delete using (true);
+
+drop policy if exists "audit_logs_select" on audit_logs;
+drop policy if exists "audit_logs_insert" on audit_logs;
+drop policy if exists "audit_logs_update" on audit_logs;
+drop policy if exists "audit_logs_delete" on audit_logs;
+create policy "audit_logs_select" on audit_logs for select using (true);
+create policy "audit_logs_insert" on audit_logs for insert with check (true);
+create policy "audit_logs_update" on audit_logs for update using (true) with check (true);
+create policy "audit_logs_delete" on audit_logs for delete using (true);
 
 -- Production safety:
 -- This schema creates tables, columns, indexes, and policies only.

@@ -39,6 +39,8 @@ import {
 } from "@/lib/backup";
 import {
   createSampleData,
+  CLOSED_MONTH_MESSAGE,
+  closeMonth,
   deleteClient,
   deleteClientPermanently,
   deleteMonthlyWorkReport,
@@ -48,7 +50,12 @@ import {
   deleteWorkType,
   deleteWorkTypePermanently,
   fetchData,
+  hasValidClosingBackup,
   issueWorkerShareLink,
+  isMonthClosed,
+  latestClosingBackup,
+  recordFullBackup,
+  reopenMonth,
   toggleWorkerShareLink,
   updatePaymentStatementSettings,
   updateSortingUnitPrice,
@@ -72,10 +79,13 @@ import {
 } from "@/lib/sorting-count";
 import type {
   AppData,
+  AuditLog,
+  BackupRecord,
   Client,
   DailyReport,
   MonthlyWorkReport,
   MonthlyWorkReportInput,
+  MonthlyClosing,
   PaymentStatementSettings,
   ReportInput,
   SortingUnitPrice,
@@ -86,7 +96,7 @@ import type {
   WorkType
 } from "@/lib/types";
 
-type MainTab = "input" | "summary" | "outsource" | "more";
+type MainTab = "input" | "summary" | "closing" | "outsource" | "more";
 type MoreTab = "home" | "list" | "billing" | "backup" | "settings";
 type WorkKind = "sorting" | string;
 type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement";
@@ -195,7 +205,10 @@ const emptyData: AppData = {
   workerOutsourcePrices: [],
   workerShareLinks: [],
   paymentStatementSettings: emptySettings,
-  monthlyWorkReports: []
+  monthlyWorkReports: [],
+  monthlyClosings: [],
+  backupRecords: [],
+  auditLogs: []
 };
 
 function todayDate() {
@@ -263,6 +276,9 @@ export default function Home() {
   const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null);
   const [message, setMessage] = useState("");
   const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
+  const [closingNote, setClosingNote] = useState("");
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopenConfirmText, setReopenConfirmText] = useState("");
 
   useEffect(() => {
     fetchData().then((result) => {
@@ -290,6 +306,10 @@ export default function Home() {
   const outsourceSummary = useMemo(() => buildOutsourcePaymentSummary(data, month), [data, month]);
   const clientProfitability = useMemo(() => buildClientProfitability(data, month), [data, month]);
   const monthlySortingReports = useMemo(() => data.reports.filter((report) => report.workMonth === month), [data.reports, month]);
+  const currentClosing = useMemo(() => data.monthlyClosings.find((closing) => closing.targetMonth === month), [data.monthlyClosings, month]);
+  const targetMonthClosed = Boolean(currentClosing?.isClosed);
+  const closingBackup = useMemo(() => latestClosingBackup(data, month), [data, month]);
+  const closingBackupValid = useMemo(() => hasValidClosingBackup(data, month), [data, month]);
 
   const allWork = useMemo(
     () =>
@@ -339,6 +359,13 @@ export default function Home() {
   function exportBackup(kind: BackupKind) {
     downloadBackupJson(kind, data);
     notify("バックアップJSONを出力しました。");
+  }
+
+  async function exportClosingBackup() {
+    const fileName = downloadBackupJson("all", data);
+    const next = await recordFullBackup(month, fileName, data);
+    setData(next);
+    notify("月次確定前バックアップを出力しました。");
   }
 
   function exportBackupCsv(action: () => void) {
@@ -491,6 +518,7 @@ export default function Home() {
 
   async function submitSorting(event: FormEvent) {
     event.preventDefault();
+    if (isMonthClosed(data, monthFromDate(sortingForm.workDate))) return notify(CLOSED_MONTH_MESSAGE);
     if (!sortingForm.workerId || !sortingForm.clientId) return notify("担当者と顧問先を選択してください。");
     const countError = validateSortingCounts();
     if (countError) return notify(countError);
@@ -498,18 +526,24 @@ export default function Home() {
   }
 
   async function confirmSaveSorting() {
-    const next = await upsertReport({ ...sortingForm, id: editingSorting?.id }, data);
-    setData(next);
-    refreshRecentBackups(next, editingSorting ? next.reports.find((report) => report.id === editingSorting.id) : latestByUpdatedAt(next.reports));
-    setEditingSorting(null);
-    setSortingForm(blankSorting(next));
-    setSortingCountState(emptySortingCountState());
-    setConfirmKind(null);
-    notify("仕訳作業を保存しました。");
+    try {
+      const next = await upsertReport({ ...sortingForm, id: editingSorting?.id }, data);
+      setData(next);
+      refreshRecentBackups(next, editingSorting ? next.reports.find((report) => report.id === editingSorting.id) : latestByUpdatedAt(next.reports));
+      setEditingSorting(null);
+      setSortingForm(blankSorting(next));
+      setSortingCountState(emptySortingCountState());
+      setConfirmKind(null);
+      notify("仕訳作業を保存しました。");
+    } catch (error) {
+      setConfirmKind(null);
+      notify(errorMessage(error));
+    }
   }
 
   async function submitMonthly(event: FormEvent) {
     event.preventDefault();
+    if (isMonthClosed(data, monthFromDate(monthlyForm.workDate))) return notify(CLOSED_MONTH_MESSAGE);
     if (!monthlyForm.workerId || !monthlyForm.clientId) return notify("担当者と顧問先を選択してください。");
     const kind = monthlyForm.workTypeId;
     const workType = data.workTypes.find((item) => item.id === kind);
@@ -523,25 +557,31 @@ export default function Home() {
     const kind = monthlyForm.workTypeId;
     const workType = data.workTypes.find((item) => item.id === kind);
     if (!workType) return notify("作業種別を選択してください。");
-    const next = await upsertMonthlyWorkReport(
-      {
-        ...monthlyForm,
-        workTypeId: kind,
-        documentCount: workType.unit === "count" ? monthlyForm.documentCount : 0,
-        workMinutes: workType.unit === "time" ? monthlyForm.workMinutes : 0,
-        id: editingMonthly?.id
-      },
-      data
-    );
-    setData(next);
-    refreshRecentBackups(next, editingMonthly ? next.monthlyWorkReports.find((report) => report.id === editingMonthly.id) : latestByUpdatedAt(next.monthlyWorkReports));
-    setEditingMonthly(null);
-    setMonthlyForm(blankMonthly(next, kind));
-    setConfirmKind(null);
-    notify("作業を保存しました。");
+    try {
+      const next = await upsertMonthlyWorkReport(
+        {
+          ...monthlyForm,
+          workTypeId: kind,
+          documentCount: workType.unit === "count" ? monthlyForm.documentCount : 0,
+          workMinutes: workType.unit === "time" ? monthlyForm.workMinutes : 0,
+          id: editingMonthly?.id
+        },
+        data
+      );
+      setData(next);
+      refreshRecentBackups(next, editingMonthly ? next.monthlyWorkReports.find((report) => report.id === editingMonthly.id) : latestByUpdatedAt(next.monthlyWorkReports));
+      setEditingMonthly(null);
+      setMonthlyForm(blankMonthly(next, kind));
+      setConfirmKind(null);
+      notify("作業を保存しました。");
+    } catch (error) {
+      setConfirmKind(null);
+      notify(errorMessage(error));
+    }
   }
 
   function editSorting(report: DailyReport) {
+    if (isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
     setWorkKind("sorting");
     setEditingSorting(report);
     setSortingForm({ workDate: report.workDate, workerId: report.workerId, clientId: report.clientId, manualCount: report.manualCount, smartImportCount: report.smartImportCount, totalSortingCount: report.totalSortingCount, memo: report.memo });
@@ -550,10 +590,67 @@ export default function Home() {
   }
 
   function editMonthly(report: MonthlyWorkReport) {
+    if (isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
     setWorkKind(report.workTypeId);
     setEditingMonthly(report);
     setMonthlyForm({ workDate: report.workDate, workerId: report.workerId, workTypeId: report.workTypeId, clientId: report.clientId, documentCount: report.documentCount, workMinutes: report.workMinutes, memo: report.memo });
     setMainTab("input");
+  }
+
+  async function removeSortingReport(id: string) {
+    const report = data.reports.find((item) => item.id === id);
+    if (report && isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
+    try {
+      setData(await deleteReport(id, data));
+      notify("仕訳作業を削除しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function removeMonthlyReport(id: string) {
+    const report = data.monthlyWorkReports.find((item) => item.id === id);
+    if (report && isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
+    try {
+      setData(await deleteMonthlyWorkReport(id, data));
+      notify("作業を削除しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function executeMonthlyClosing() {
+    try {
+      const next = await closeMonth(
+        month,
+        data,
+        {
+          salesTotal: profitability.revenue,
+          outsourceTotal: profitability.outsourceCost,
+          grossProfit: profitability.grossProfit,
+          reportCount: sortingSummary.reports.length + monthlySummary.reports.length
+        },
+        closingNote
+      );
+      setData(next);
+      setClosingNote("");
+      notify("月次確定しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function executeMonthlyReopen() {
+    if (reopenConfirmText !== "確定解除") return notify("確認文言に「確定解除」と入力してください。");
+    try {
+      const next = await reopenMonth(month, reopenReason, data);
+      setData(next);
+      setReopenReason("");
+      setReopenConfirmText("");
+      notify("月次確定を解除しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
   }
 
   async function submitWorker(event: FormEvent) {
@@ -810,9 +907,10 @@ export default function Home() {
             </div>
             <span className="w-fit rounded-full border border-line bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-600">保存先: {mode === "supabase" ? "Supabase" : "ローカル"}</span>
           </div>
-          <nav className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <nav className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
             <MainButton active={mainTab === "input"} onClick={() => setMainTab("input")} label="作業入力" />
             <MainButton active={mainTab === "summary"} onClick={() => setMainTab("summary")} label="月次集計" />
+            <MainButton active={mainTab === "closing"} onClick={() => setMainTab("closing")} label="月次確定" />
             <MainButton active={mainTab === "outsource"} onClick={() => setMainTab("outsource")} label="外注費支払" />
             <MainButton active={mainTab === "more"} onClick={() => setMainTab("more")} label="その他" />
           </nav>
@@ -831,6 +929,7 @@ export default function Home() {
                 <ChoiceButton key={workType.id} active={workKind === workType.id} onClick={() => switchWorkKind(workType.id)} label={workType.name} />
               ))}
             </div>
+            {isMonthClosed(data, monthFromDate(workKind === "sorting" ? sortingForm.workDate : monthlyForm.workDate)) ? <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{CLOSED_MONTH_MESSAGE}</div> : null}
             {workKind === "sorting" ? (
               <form className="mt-5 grid gap-4 lg:grid-cols-2" onSubmit={submitSorting}>
                 <DateField value={sortingForm.workDate} onChange={(value) => setSortingForm({ ...sortingForm, workDate: value })} />
@@ -865,6 +964,30 @@ export default function Home() {
           </section>
         ) : null}
 
+        {mainTab === "closing" ? (
+          <MonthlyClosingPanel
+            month={month}
+            setMonth={setMonth}
+            reportCount={sortingSummary.reports.length + monthlySummary.reports.length}
+            revenue={profitability.revenue}
+            outsourceCost={profitability.outsourceCost}
+            grossProfit={profitability.grossProfit}
+            closing={currentClosing}
+            backup={closingBackup}
+            backupValid={closingBackupValid}
+            exportBackup={exportClosingBackup}
+            closeMonth={executeMonthlyClosing}
+            reopenMonth={executeMonthlyReopen}
+            note={closingNote}
+            setNote={setClosingNote}
+            reopenReason={reopenReason}
+            setReopenReason={setReopenReason}
+            reopenConfirmText={reopenConfirmText}
+            setReopenConfirmText={setReopenConfirmText}
+            auditLogs={data.auditLogs}
+          />
+        ) : null}
+
         {mainTab === "outsource" ? (
           <section className="space-y-6">
             <MonthHeader title="外注費支払" description="対象月の担当者別支払額と明細を確認します。" month={month} setMonth={setMonth} action={<div className="flex flex-wrap gap-2"><button className="button-secondary" onClick={() => exportCsv(() => downloadOutsourcePaymentSummaryCsv(month, outsourceSummary.rows))}>外注費支払一覧CSV出力</button><button className="button-secondary" onClick={() => exportCsv(() => downloadOutsourcePaymentDetailCsv(month, outsourceSummary.rows))}>外注費支払明細CSV出力</button></div>} />
@@ -884,7 +1007,7 @@ export default function Home() {
               </div>
             </div>
             {moreTab === "home" ? <HomePanel month={month} setMonth={setMonth} profitability={profitability} sortingSummary={sortingSummary} monthlySummary={monthlySummary} rows={allWork.slice(0, 8)} /> : null}
-            {moreTab === "list" ? <WorkListPanel month={month} setMonth={setMonth} data={data} workers={workers} clients={clients} workTypes={workTypes} monthlySortingReports={monthlySortingReports} monthlySummary={monthlySummary} editSorting={editSorting} editMonthly={editMonthly} removeSorting={(id) => deleteReport(id, data).then(setData)} removeMonthly={(id) => deleteMonthlyWorkReport(id, data).then(setData)} exportCsv={exportCsv} /> : null}
+            {moreTab === "list" ? <WorkListPanel month={month} setMonth={setMonth} data={data} workers={workers} clients={clients} workTypes={workTypes} monthlySortingReports={monthlySortingReports} monthlySummary={monthlySummary} editSorting={editSorting} editMonthly={editMonthly} removeSorting={removeSortingReport} removeMonthly={removeMonthlyReport} exportCsv={exportCsv} /> : null}
             {moreTab === "billing" ? <BillingPanel month={month} setMonth={setMonth} rows={clientProfitability} exportCsv={() => exportCsv(() => downloadClientBillingCsv(month, clientProfitability))} /> : null}
             {moreTab === "backup" ? (
               <BackupSettingsPanel
@@ -1061,6 +1184,102 @@ function Empty({ text }: { text: string }) {
   return <div className="panel p-6 text-sm text-slate-500">{text}</div>;
 }
 
+function MonthlyClosingPanel({
+  month,
+  setMonth,
+  reportCount,
+  revenue,
+  outsourceCost,
+  grossProfit,
+  closing,
+  backup,
+  backupValid,
+  exportBackup,
+  closeMonth,
+  reopenMonth,
+  note,
+  setNote,
+  reopenReason,
+  setReopenReason,
+  reopenConfirmText,
+  setReopenConfirmText,
+  auditLogs
+}: {
+  month: string;
+  setMonth: (month: string) => void;
+  reportCount: number;
+  revenue: number;
+  outsourceCost: number;
+  grossProfit: number;
+  closing?: MonthlyClosing;
+  backup?: BackupRecord;
+  backupValid: boolean;
+  exportBackup: () => void;
+  closeMonth: () => void;
+  reopenMonth: () => void;
+  note: string;
+  setNote: (value: string) => void;
+  reopenReason: string;
+  setReopenReason: (value: string) => void;
+  reopenConfirmText: string;
+  setReopenConfirmText: (value: string) => void;
+  auditLogs: AuditLog[];
+}) {
+  const isClosed = Boolean(closing?.isClosed);
+  const monthLogs = auditLogs.filter((log) => log.targetMonth === month).slice(0, 20);
+  return (
+    <section className="space-y-6">
+      <MonthHeader title="月次確定" description="請求・外注費支払が終わった月の作業データをロックします。" month={month} setMonth={setMonth} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat label="作業件数" value={`${formatNumber(reportCount)}件`} />
+        <Stat label="売上合計" value={formatCurrency(revenue)} tone="brand" />
+        <Stat label="外注費合計" value={formatCurrency(outsourceCost)} />
+        <Stat label="粗利" value={formatCurrency(grossProfit)} tone="accent" />
+      </div>
+      <section className="panel p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 className="text-xl font-bold">バックアップ状況</h2>
+            <p className="mt-1 text-sm text-slate-500">月次確定前に全データJSONバックアップが必要です。</p>
+          </div>
+          <button className="button-primary" type="button" onClick={exportBackup}>全データをバックアップ</button>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <Info label="バックアップ状態" value={backupValid ? "実行済み" : "未実行"} />
+          <Info label="最終バックアップ日時" value={backup ? new Date(backup.backupDatetime).toLocaleString("ja-JP") : "なし"} />
+          <Info label="ファイル名" value={backup?.fileName ?? "なし"} />
+        </div>
+        {!backupValid ? <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">月次確定前に全データJSONバックアップが必要です。先にバックアップを実行してください。</p> : null}
+      </section>
+      <section className="panel p-5">
+        <h2 className="text-xl font-bold">確定操作</h2>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <Info label="対象月" value={month} />
+          <Info label="確定状態" value={isClosed ? "確定済み" : "未確定"} />
+          <Info label="確定日時" value={closing?.closedAt ? new Date(closing.closedAt).toLocaleString("ja-JP") : "なし"} />
+        </div>
+        {!isClosed ? (
+          <div className="mt-4 space-y-3">
+            <MemoField value={note} onChange={setNote} />
+            <button className="button-primary" type="button" disabled={!backupValid} onClick={closeMonth}>月次確定する</button>
+          </div>
+        ) : (
+          <div className="mt-4 space-y-3">
+            <p className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700">この月は月次確定済みです。追加・編集・削除はできません。</p>
+            <TextField label="解除理由" value={reopenReason} onChange={setReopenReason} />
+            <TextField label="確認文言（確定解除）" value={reopenConfirmText} onChange={setReopenConfirmText} />
+            <button className="button-danger" type="button" onClick={reopenMonth}>月次確定を解除</button>
+          </div>
+        )}
+      </section>
+      <section className="panel overflow-hidden">
+        <PanelTitle title="確定履歴・操作履歴" description="月次確定、確定解除、バックアップ、ブロック操作を表示します。" />
+        {!monthLogs.length ? <Empty text="この月の履歴はありません。" /> : <div className="overflow-x-auto"><table className="w-full min-w-[760px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">日時</th><th className="px-4 py-3">操作</th><th className="px-4 py-3">内容</th><th className="px-4 py-3">実行者</th></tr></thead><tbody>{monthLogs.map((log) => <tr key={log.id}><td className="table-cell font-semibold">{new Date(log.createdAt).toLocaleString("ja-JP")}</td><td className="table-cell">{log.actionType}</td><td className="table-cell">{log.message}</td><td className="table-cell">{log.createdBy}</td></tr>)}</tbody></table></div>}
+      </section>
+    </section>
+  );
+}
+
 // The remaining presentation helpers are compact table components.
 function HomePanel({ month, setMonth, profitability, sortingSummary, monthlySummary, rows }: { month: string; setMonth: (month: string) => void; profitability: { revenue: number; outsourceCost: number; grossProfit: number; grossProfitRate: number }; sortingSummary: ReturnType<typeof buildMonthlySummary>; monthlySummary: ReturnType<typeof buildMonthlyWorkSummary>; rows: { id: string; date: string; kind: string; client: string; worker: string; memo: string }[] }) {
   return <section className="space-y-6"><MonthHeader title="ホーム" description="当月の概要を表示します。" month={month} setMonth={setMonth} /><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Stat label="当月売上" value={formatCurrency(profitability.revenue)} tone="brand" /><Stat label="当月外注費" value={formatCurrency(profitability.outsourceCost)} /><Stat label="当月粗利" value={formatCurrency(profitability.grossProfit)} tone="accent" /><Stat label="当月粗利率" value={formatPercent(profitability.grossProfitRate)} tone="brand" /><Stat label="仕訳日報件数" value={`${formatNumber(sortingSummary.reports.length)}件`} /><Stat label="月次作業日報件数" value={`${formatNumber(monthlySummary.reports.length)}件`} /></div><section className="panel overflow-hidden"><PanelTitle title="最近の作業" /><SimpleWorkTable rows={rows} /></section></section>;
@@ -1071,17 +1290,17 @@ function SimpleWorkTable({ rows }: { rows: { id: string; date: string; kind: str
   return <div className="overflow-x-auto"><table className="w-full min-w-[720px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">区分</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">メモ</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.kind}-${row.id}`}><td className="table-cell font-semibold">{row.date}</td><td className="table-cell">{row.kind}</td><td className="table-cell">{row.client}</td><td className="table-cell">{row.worker}</td><td className="table-cell">{row.memo}</td></tr>)}</tbody></table></div>;
 }
 function WorkListPanel(props: { month: string; setMonth: (month: string) => void; data: AppData; workers: Map<string, string>; clients: Map<string, string>; workTypes: Map<string, WorkType>; monthlySortingReports: DailyReport[]; monthlySummary: ReturnType<typeof buildMonthlyWorkSummary>; editSorting: (report: DailyReport) => void; editMonthly: (report: MonthlyWorkReport) => void; removeSorting: (id: string) => void; removeMonthly: (id: string) => void; exportCsv: (action: () => void) => void }) {
-  return <section className="space-y-6"><MonthHeader title="作業一覧" description="仕訳作業と月次作業を確認できます。" month={props.month} setMonth={props.setMonth} action={<div className="flex flex-wrap gap-2"><button className="button-secondary" onClick={() => props.exportCsv(() => downloadSortingDailyReportCsv(props.month, props.monthlySortingReports, props.data))}>仕訳日報CSV出力</button><button className="button-secondary" onClick={() => props.exportCsv(() => downloadMonthlyWorkReportCsv(props.month, props.monthlySummary.reports, props.data))}>月次作業日報CSV出力</button></div>} /><section className="panel overflow-hidden"><PanelTitle title="仕訳作業" /><ReportTable reports={props.data.reports} data={props.data} workers={props.workers} clients={props.clients} onEdit={props.editSorting} onDelete={props.removeSorting} /></section><section className="panel overflow-hidden"><PanelTitle title="月次作業" /><MonthlyWorkTable reports={props.data.monthlyWorkReports} workers={props.workers} clients={props.clients} workTypes={props.workTypes} onEdit={props.editMonthly} onDelete={props.removeMonthly} /></section></section>;
+  return <section className="space-y-6"><MonthHeader title="作業一覧" description="仕訳作業と月次作業を確認できます。" month={props.month} setMonth={props.setMonth} action={<div className="flex flex-wrap gap-2"><button className="button-secondary" onClick={() => props.exportCsv(() => downloadSortingDailyReportCsv(props.month, props.monthlySortingReports, props.data))}>仕訳日報CSV出力</button><button className="button-secondary" onClick={() => props.exportCsv(() => downloadMonthlyWorkReportCsv(props.month, props.monthlySummary.reports, props.data))}>月次作業日報CSV出力</button></div>} /><section className="panel overflow-hidden"><PanelTitle title="仕訳作業" /><ReportTable reports={props.data.reports} data={props.data} workers={props.workers} clients={props.clients} onEdit={props.editSorting} onDelete={props.removeSorting} /></section><section className="panel overflow-hidden"><PanelTitle title="月次作業" /><MonthlyWorkTable reports={props.data.monthlyWorkReports} data={props.data} workers={props.workers} clients={props.clients} workTypes={props.workTypes} onEdit={props.editMonthly} onDelete={props.removeMonthly} /></section></section>;
 }
 
 function ReportTable({ reports, data, workers, clients, onEdit, onDelete }: { reports: DailyReport[]; data: AppData; workers: Map<string, string>; clients: Map<string, string>; onEdit: (report: DailyReport) => void; onDelete: (id: string) => void }) {
   if (!reports.length) return <Empty text="仕訳作業はありません。" />;
-  return <div className="overflow-x-auto"><table className="w-full min-w-[1080px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">総仕訳数</th><th className="px-4 py-3 text-right">作業件数</th><th className="px-4 py-3">登録元</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{reports.map((report) => <tr key={report.id}><td className="table-cell font-semibold">{report.workDate}</td><td className="table-cell">{workers.get(report.workerId) ?? "未設定"}</td><td className="table-cell">{clients.get(report.clientId) ?? "未設定"}</td><td className="table-cell text-right">{formatNumber(report.manualCount)}</td><td className="table-cell text-right">{formatNumber(report.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(report.totalSortingCount)}</td><td className="table-cell text-right">{formatNumber(calculateAutoWorkCount(data.reports, report))}</td><td className="table-cell">{reportSourceLabel(report.source, report.sourceWorkerId, workers)}</td><td className="table-cell text-right"><button className="button-secondary mr-2" onClick={() => onEdit(report)}>編集</button><button className="button-danger" onClick={() => onDelete(report.id)}>削除</button></td></tr>)}</tbody></table></div>;
+  return <div className="overflow-x-auto"><table className="w-full min-w-[1080px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">総仕訳数</th><th className="px-4 py-3 text-right">作業件数</th><th className="px-4 py-3">登録元</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{reports.map((report) => { const closed = isMonthClosed(data, report.workMonth); return <tr key={report.id}><td className="table-cell font-semibold">{report.workDate}{closed ? <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">確定済み</span> : null}</td><td className="table-cell">{workers.get(report.workerId) ?? "未設定"}</td><td className="table-cell">{clients.get(report.clientId) ?? "未設定"}</td><td className="table-cell text-right">{formatNumber(report.manualCount)}</td><td className="table-cell text-right">{formatNumber(report.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(report.totalSortingCount)}</td><td className="table-cell text-right">{formatNumber(calculateAutoWorkCount(data.reports, report))}</td><td className="table-cell">{reportSourceLabel(report.source, report.sourceWorkerId, workers)}</td><td className="table-cell text-right"><button className="button-secondary mr-2 disabled:opacity-50" disabled={closed} onClick={() => onEdit(report)}>編集</button><button className="button-danger disabled:opacity-50" disabled={closed} onClick={() => onDelete(report.id)}>削除</button></td></tr>; })}</tbody></table></div>;
 }
 
-function MonthlyWorkTable({ reports, workers, clients, workTypes, onEdit, onDelete }: { reports: MonthlyWorkReport[]; workers: Map<string, string>; clients: Map<string, string>; workTypes: Map<string, WorkType>; onEdit: (report: MonthlyWorkReport) => void; onDelete: (id: string) => void }) {
+function MonthlyWorkTable({ reports, data, workers, clients, workTypes, onEdit, onDelete }: { reports: MonthlyWorkReport[]; data: AppData; workers: Map<string, string>; clients: Map<string, string>; workTypes: Map<string, WorkType>; onEdit: (report: MonthlyWorkReport) => void; onDelete: (id: string) => void }) {
   if (!reports.length) return <Empty text="月次作業はありません。" />;
-  return <div className="overflow-x-auto"><table className="w-full min-w-[1020px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">作業区分</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3">登録元</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{reports.map((report) => { const workType = workTypes.get(report.workTypeId); return <tr key={report.id}><td className="table-cell font-semibold">{report.workDate}</td><td className="table-cell">{workers.get(report.workerId) ?? "未設定"}</td><td className="table-cell">{clients.get(report.clientId) ?? "未設定"}</td><td className="table-cell">{workType?.name ?? "未設定"}</td><td className="table-cell text-right">{workType?.unit === "time" ? formatMinutes(report.workMinutes) : `${formatNumber(report.documentCount)}件`}</td><td className="table-cell">{reportSourceLabel(report.source, report.sourceWorkerId, workers)}</td><td className="table-cell text-right"><button className="button-secondary mr-2" onClick={() => onEdit(report)}>編集</button><button className="button-danger" onClick={() => onDelete(report.id)}>削除</button></td></tr>; })}</tbody></table></div>;
+  return <div className="overflow-x-auto"><table className="w-full min-w-[1020px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">作業区分</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3">登録元</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{reports.map((report) => { const workType = workTypes.get(report.workTypeId); const closed = isMonthClosed(data, report.workMonth); return <tr key={report.id}><td className="table-cell font-semibold">{report.workDate}{closed ? <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">確定済み</span> : null}</td><td className="table-cell">{workers.get(report.workerId) ?? "未設定"}</td><td className="table-cell">{clients.get(report.clientId) ?? "未設定"}</td><td className="table-cell">{workType?.name ?? "未設定"}</td><td className="table-cell text-right">{workType?.unit === "time" ? formatMinutes(report.workMinutes) : `${formatNumber(report.documentCount)}件`}</td><td className="table-cell">{reportSourceLabel(report.source, report.sourceWorkerId, workers)}</td><td className="table-cell text-right"><button className="button-secondary mr-2 disabled:opacity-50" disabled={closed} onClick={() => onEdit(report)}>編集</button><button className="button-danger disabled:opacity-50" disabled={closed} onClick={() => onDelete(report.id)}>削除</button></td></tr>; })}</tbody></table></div>;
 }
 function SummaryCards({ sortingSummary, monthlySummary }: { sortingSummary: ReturnType<typeof buildMonthlySummary>; monthlySummary: ReturnType<typeof buildMonthlyWorkSummary> }) {
   const sortingRevenue = sortingSummary.clientRows.reduce((sum, row) => sum + row.sortingRevenue, 0);

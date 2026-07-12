@@ -126,6 +126,51 @@ export type AppData = {
   workerShareLinks: WorkerShareLink[];
   paymentStatementSettings: PaymentStatementSettings;
   monthlyWorkReports: MonthlyWorkReport[];
+  monthlyClosings: MonthlyClosing[];
+  backupRecords: BackupRecord[];
+  auditLogs: AuditLog[];
+};
+
+export type MonthlyClosing = {
+  id: string;
+  targetMonth: string;
+  isClosed: boolean;
+  closedAt: string;
+  closedBy: string;
+  closingBackupId: string;
+  salesTotal: number;
+  outsourceTotal: number;
+  grossProfit: number;
+  reportCount: number;
+  note: string;
+  reopenedAt: string;
+  reopenedBy: string;
+  reopenReason: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type BackupRecord = {
+  id: string;
+  backupDatetime: string;
+  backupType: "full_json" | "work_logs" | "settings";
+  targetMonth: string;
+  createdBy: string;
+  fileName: string;
+  createdAt: string;
+};
+
+export type AuditLog = {
+  id: string;
+  actionType: string;
+  targetType: string;
+  targetId: string;
+  targetMonth: string;
+  message: string;
+  beforeData?: unknown;
+  afterData?: unknown;
+  createdBy: string;
+  createdAt: string;
 };
 
 export type ReportInput = Omit<DailyReport, "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt"> & Partial<Pick<DailyReport, "source" | "sourceWorkerId">>;

@@ -105,6 +105,7 @@ export function downloadBackupJson(kind: BackupKind, data: AppData) {
   const prefix = kind === "all" ? "backup_all" : kind === "work_logs" ? "backup_work_logs" : "backup_settings";
   const filename = `${prefix}_${timestampForFile()}.json`;
   downloadText(filename, JSON.stringify(createBackupPayload(data, kind), null, 2), "application/json;charset=utf-8");
+  return filename;
 }
 
 export function saveRecentLocalBackup(data: AppData, lastSavedWork?: DailyReport | MonthlyWorkReport) {

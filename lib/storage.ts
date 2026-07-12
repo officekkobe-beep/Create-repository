@@ -1,7 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { monthFromDate } from "./calculations";
 import { defaultPaymentStatementSettings, sampleData } from "./sample-data";
-import type { AppData, Client, DailyReport, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkType } from "./types";
+import type { AppData, AuditLog, BackupRecord, Client, DailyReport, MonthlyClosing, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkType } from "./types";
 
 const STORAGE_KEY = "sorting-daily-report-data";
 
@@ -65,7 +65,10 @@ function emptyAppData(): AppData {
     workerShareLinks: [],
     paymentStatementSettings: defaultPaymentStatementSettings,
     reports: [],
-    monthlyWorkReports: []
+    monthlyWorkReports: [],
+    monthlyClosings: [],
+    backupRecords: [],
+    auditLogs: []
   };
 }
 
@@ -82,7 +85,10 @@ function normalizeData(data: Partial<AppData>): AppData {
     workerShareLinks: data.workerShareLinks ?? [],
     paymentStatementSettings: { ...defaultPaymentStatementSettings, ...(data.paymentStatementSettings ?? {}) },
     reports: (data.reports ?? []).map((report) => ({ ...report, source: report.source ?? "admin", sourceWorkerId: report.sourceWorkerId ?? "" })),
-    monthlyWorkReports: (data.monthlyWorkReports ?? []).map((report) => ({ ...report, workerId: report.workerId ?? workers[0]?.id ?? "", source: report.source ?? "admin", sourceWorkerId: report.sourceWorkerId ?? "" }))
+    monthlyWorkReports: (data.monthlyWorkReports ?? []).map((report) => ({ ...report, workerId: report.workerId ?? workers[0]?.id ?? "", source: report.source ?? "admin", sourceWorkerId: report.sourceWorkerId ?? "" })),
+    monthlyClosings: data.monthlyClosings ?? [],
+    backupRecords: data.backupRecords ?? [],
+    auditLogs: data.auditLogs ?? []
   };
 }
 
@@ -171,6 +177,108 @@ function fromMonthlyWorkReport(input: MonthlyWorkReport) {
   };
 }
 
+function toMonthlyClosing(row: Record<string, unknown>): MonthlyClosing {
+  return {
+    id: String(row.id),
+    targetMonth: String(row.target_month),
+    isClosed: Boolean(row.is_closed),
+    closedAt: String(row.closed_at ?? ""),
+    closedBy: String(row.closed_by ?? ""),
+    closingBackupId: String(row.closing_backup_id ?? ""),
+    salesTotal: Number(row.sales_total ?? 0),
+    outsourceTotal: Number(row.outsource_total ?? 0),
+    grossProfit: Number(row.gross_profit ?? 0),
+    reportCount: Number(row.report_count ?? 0),
+    note: String(row.note ?? ""),
+    reopenedAt: String(row.reopened_at ?? ""),
+    reopenedBy: String(row.reopened_by ?? ""),
+    reopenReason: String(row.reopen_reason ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? "")
+  };
+}
+
+function fromMonthlyClosing(input: MonthlyClosing) {
+  return {
+    id: input.id,
+    target_month: input.targetMonth,
+    is_closed: input.isClosed,
+    closed_at: input.closedAt || null,
+    closed_by: input.closedBy,
+    closing_backup_id: input.closingBackupId || null,
+    sales_total: input.salesTotal,
+    outsource_total: input.outsourceTotal,
+    gross_profit: input.grossProfit,
+    report_count: input.reportCount,
+    note: input.note,
+    reopened_at: input.reopenedAt || null,
+    reopened_by: input.reopenedBy,
+    reopen_reason: input.reopenReason,
+    created_at: input.createdAt,
+    updated_at: input.updatedAt
+  };
+}
+
+function toBackupRecord(row: Record<string, unknown>): BackupRecord {
+  return {
+    id: String(row.id),
+    backupDatetime: String(row.backup_datetime),
+    backupType: String(row.backup_type) as BackupRecord["backupType"],
+    targetMonth: String(row.target_month),
+    createdBy: String(row.created_by ?? ""),
+    fileName: String(row.file_name ?? ""),
+    createdAt: String(row.created_at ?? "")
+  };
+}
+
+function fromBackupRecord(input: BackupRecord) {
+  return {
+    id: input.id,
+    backup_datetime: input.backupDatetime,
+    backup_type: input.backupType,
+    target_month: input.targetMonth,
+    created_by: input.createdBy,
+    file_name: input.fileName,
+    created_at: input.createdAt
+  };
+}
+
+function toAuditLog(row: Record<string, unknown>): AuditLog {
+  return {
+    id: String(row.id),
+    actionType: String(row.action_type),
+    targetType: String(row.target_type),
+    targetId: String(row.target_id ?? ""),
+    targetMonth: String(row.target_month ?? ""),
+    message: String(row.message ?? ""),
+    beforeData: row.before_data,
+    afterData: row.after_data,
+    createdBy: String(row.created_by ?? ""),
+    createdAt: String(row.created_at ?? "")
+  };
+}
+
+function fromAuditLog(input: AuditLog) {
+  return {
+    id: input.id,
+    action_type: input.actionType,
+    target_type: input.targetType,
+    target_id: input.targetId,
+    target_month: input.targetMonth,
+    message: input.message,
+    before_data: input.beforeData ?? null,
+    after_data: input.afterData ?? null,
+    created_by: input.createdBy,
+    created_at: input.createdAt
+  };
+}
+
+export function isMonthClosed(data: AppData, targetMonth: string) {
+  return data.monthlyClosings.some((closing) => closing.targetMonth === targetMonth && closing.isClosed);
+}
+
+export const CLOSED_MONTH_MESSAGE = "この月は月次確定済みのため、作業の追加・編集・削除はできません。修正が必要な場合は、月次確定を解除してください。";
+
 function mergeById<T extends { id: string }>(current: T[], samples: T[]) {
   return [...current, ...samples.filter((sample) => !current.some((item) => item.id === sample.id))];
 }
@@ -254,7 +362,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
   const supabase = supabaseClient();
   if (!supabase) return { data: loadLocal(), mode: "local" };
 
-  const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult] = await Promise.all([
+  const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult, monthlyClosingsResult, backupRecordsResult, auditLogsResult] = await Promise.all([
     supabase.from("workers").select("*").order("name"),
     supabase.from("clients").select("*").order("name"),
     supabase.from("daily_reports").select("*").order("work_date", { ascending: false }),
@@ -264,7 +372,10 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
     supabase.from("worker_outsource_prices").select("*").order("worker_id"),
     supabase.from("worker_share_links").select("*").order("worker_id"),
     supabase.from("payment_statement_settings").select("*").eq("id", "default").maybeSingle(),
-    supabase.from("monthly_work_reports").select("*").order("work_date", { ascending: false })
+    supabase.from("monthly_work_reports").select("*").order("work_date", { ascending: false }),
+    supabase.from("monthly_closings").select("*").order("target_month", { ascending: false }),
+    supabase.from("backup_records").select("*").order("backup_datetime", { ascending: false }),
+    supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(100)
   ]);
 
   if (workersResult.error || clientsResult.error || reportsResult.error || workTypesResult.error || unitPricesResult.error || sortingUnitPricesResult.error || workerOutsourcePricesResult.error || workerShareLinksResult.error || paymentStatementSettingsResult.error || monthlyWorkReportsResult.error) {
@@ -353,6 +464,10 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
           }
         : defaultPaymentStatementSettings,
       monthlyWorkReports: (monthlyWorkReportsResult.data ?? []).map(toMonthlyWorkReport)
+      ,
+      monthlyClosings: monthlyClosingsResult.error ? [] : (monthlyClosingsResult.data ?? []).map(toMonthlyClosing),
+      backupRecords: backupRecordsResult.error ? [] : (backupRecordsResult.data ?? []).map(toBackupRecord),
+      auditLogs: auditLogsResult.error ? [] : (auditLogsResult.data ?? []).map(toAuditLog)
     })
   };
 }
@@ -598,13 +713,149 @@ export async function deleteWorkTypePermanently(id: string, current: AppData) {
   return next;
 }
 
+async function insertAuditLog(current: AppData, log: Omit<AuditLog, "id" | "createdAt">) {
+  const supabase = supabaseClient();
+  const record: AuditLog = { id: createId("audit"), createdAt: nowIso(), ...log };
+  if (supabase) {
+    await supabase.from("audit_logs").insert(fromAuditLog(record));
+  }
+  return { ...current, auditLogs: [record, ...current.auditLogs].slice(0, 100) };
+}
+
+async function recordBlockedClosedMonth(current: AppData, targetMonth: string, message: string) {
+  await insertAuditLog(current, {
+    actionType: "blocked_closed_month",
+    targetType: "work_log",
+    targetId: "",
+    targetMonth,
+    message,
+    createdBy: "system"
+  });
+}
+
+export function latestClosingBackup(data: AppData, targetMonth: string) {
+  return data.backupRecords
+    .filter((record) => record.targetMonth === targetMonth && record.backupType === "full_json")
+    .slice()
+    .sort((a, b) => b.backupDatetime.localeCompare(a.backupDatetime))[0];
+}
+
+export function hasValidClosingBackup(data: AppData, targetMonth: string) {
+  const closing = data.monthlyClosings.find((item) => item.targetMonth === targetMonth);
+  const backup = latestClosingBackup(data, targetMonth);
+  if (!backup) return false;
+  if (!closing?.reopenedAt) return true;
+  return backup.backupDatetime > closing.reopenedAt;
+}
+
+export async function recordFullBackup(targetMonth: string, fileName: string, current: AppData, createdBy = "admin") {
+  const record: BackupRecord = {
+    id: createId("backup"),
+    backupDatetime: nowIso(),
+    backupType: "full_json",
+    targetMonth,
+    createdBy,
+    fileName,
+    createdAt: nowIso()
+  };
+  const supabase = supabaseClient();
+  if (supabase) {
+    await supabase.from("backup_records").insert(fromBackupRecord(record));
+  }
+  const next = await insertAuditLog({ ...current, backupRecords: [record, ...current.backupRecords] }, {
+    actionType: "backup_created",
+    targetType: "backup_records",
+    targetId: record.id,
+    targetMonth,
+    message: `月次確定前バックアップを実行しました: ${fileName}`,
+    afterData: record,
+    createdBy
+  });
+  saveLocal(next);
+  return next;
+}
+
+export async function closeMonth(targetMonth: string, current: AppData, totals: Pick<MonthlyClosing, "salesTotal" | "outsourceTotal" | "grossProfit" | "reportCount">, note = "", closedBy = "admin") {
+  if (!hasValidClosingBackup(current, targetMonth)) {
+    throw new Error("月次確定前に全データJSONバックアップが必要です。先にバックアップを実行してください。");
+  }
+  const existing = current.monthlyClosings.find((item) => item.targetMonth === targetMonth);
+  const backup = latestClosingBackup(current, targetMonth);
+  const record: MonthlyClosing = {
+    id: existing?.id ?? createId("closing"),
+    targetMonth,
+    isClosed: true,
+    closedAt: nowIso(),
+    closedBy,
+    closingBackupId: backup?.id ?? "",
+    salesTotal: totals.salesTotal,
+    outsourceTotal: totals.outsourceTotal,
+    grossProfit: totals.grossProfit,
+    reportCount: totals.reportCount,
+    note,
+    reopenedAt: existing?.reopenedAt ?? "",
+    reopenedBy: existing?.reopenedBy ?? "",
+    reopenReason: existing?.reopenReason ?? "",
+    createdAt: existing?.createdAt ?? nowIso(),
+    updatedAt: nowIso()
+  };
+  const supabase = supabaseClient();
+  if (supabase) await supabase.from("monthly_closings").upsert(fromMonthlyClosing(record), { onConflict: "target_month" });
+  const nextClosing = { ...current, monthlyClosings: [record, ...current.monthlyClosings.filter((item) => item.targetMonth !== targetMonth)] };
+  const next = await insertAuditLog(nextClosing, {
+    actionType: "monthly_closed",
+    targetType: "monthly_closings",
+    targetId: record.id,
+    targetMonth,
+    message: `${targetMonth}を月次確定しました。`,
+    afterData: record,
+    createdBy: closedBy
+  });
+  saveLocal(next);
+  return next;
+}
+
+export async function reopenMonth(targetMonth: string, reason: string, current: AppData, reopenedBy = "admin") {
+  if (!reason.trim()) throw new Error("解除理由を入力してください。");
+  const existing = current.monthlyClosings.find((item) => item.targetMonth === targetMonth);
+  if (!existing) throw new Error("月次確定データが見つかりません。");
+  const record: MonthlyClosing = {
+    ...existing,
+    isClosed: false,
+    reopenedAt: nowIso(),
+    reopenedBy,
+    reopenReason: reason.trim(),
+    updatedAt: nowIso()
+  };
+  const supabase = supabaseClient();
+  if (supabase) await supabase.from("monthly_closings").upsert(fromMonthlyClosing(record), { onConflict: "target_month" });
+  const nextClosing = { ...current, monthlyClosings: [record, ...current.monthlyClosings.filter((item) => item.targetMonth !== targetMonth)] };
+  const next = await insertAuditLog(nextClosing, {
+    actionType: "monthly_reopened",
+    targetType: "monthly_closings",
+    targetId: record.id,
+    targetMonth,
+    message: `${targetMonth}の月次確定を解除しました。理由: ${record.reopenReason}`,
+    beforeData: existing,
+    afterData: record,
+    createdBy: reopenedBy
+  });
+  saveLocal(next);
+  return next;
+}
+
 export async function upsertReport(input: Partial<DailyReport> & ReportInput, current: AppData) {
   const supabase = supabaseClient();
   const existing = input.id ? current.reports.find((report) => report.id === input.id) : undefined;
+  const workMonth = monthFromDate(input.workDate);
+  if (isMonthClosed(current, workMonth)) {
+    await recordBlockedClosedMonth(current, workMonth, CLOSED_MONTH_MESSAGE);
+    throw new Error(CLOSED_MONTH_MESSAGE);
+  }
   const record: DailyReport = {
     id: input.id ?? createId("report"),
     workDate: input.workDate,
-    workMonth: monthFromDate(input.workDate),
+    workMonth,
     workerId: input.workerId,
     clientId: input.clientId,
     manualCount: Number(input.manualCount),
@@ -627,6 +878,11 @@ export async function upsertReport(input: Partial<DailyReport> & ReportInput, cu
 
 export async function deleteReport(id: string, current: AppData) {
   const supabase = supabaseClient();
+  const target = current.reports.find((item) => item.id === id);
+  if (target && isMonthClosed(current, target.workMonth)) {
+    await recordBlockedClosedMonth(current, target.workMonth, CLOSED_MONTH_MESSAGE);
+    throw new Error(CLOSED_MONTH_MESSAGE);
+  }
   const next = { ...current, reports: current.reports.filter((item) => item.id !== id) };
   if (supabase) await supabase.from("daily_reports").delete().eq("id", id);
   saveLocal(next);
@@ -636,10 +892,15 @@ export async function deleteReport(id: string, current: AppData) {
 export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> & MonthlyWorkReportInput, current: AppData) {
   const supabase = supabaseClient();
   const existing = input.id ? current.monthlyWorkReports.find((report) => report.id === input.id) : undefined;
+  const workMonth = monthFromDate(input.workDate);
+  if (isMonthClosed(current, workMonth)) {
+    await recordBlockedClosedMonth(current, workMonth, CLOSED_MONTH_MESSAGE);
+    throw new Error(CLOSED_MONTH_MESSAGE);
+  }
   const record: MonthlyWorkReport = {
     id: input.id ?? createId("monthly-work"),
     workDate: input.workDate,
-    workMonth: monthFromDate(input.workDate),
+    workMonth,
     workerId: input.workerId,
     workTypeId: input.workTypeId,
     clientId: input.clientId,
@@ -662,6 +923,11 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
 
 export async function deleteMonthlyWorkReport(id: string, current: AppData) {
   const supabase = supabaseClient();
+  const target = current.monthlyWorkReports.find((item) => item.id === id);
+  if (target && isMonthClosed(current, target.workMonth)) {
+    await recordBlockedClosedMonth(current, target.workMonth, CLOSED_MONTH_MESSAGE);
+    throw new Error(CLOSED_MONTH_MESSAGE);
+  }
   const next = { ...current, monthlyWorkReports: current.monthlyWorkReports.filter((item) => item.id !== id) };
   if (supabase) await supabase.from("monthly_work_reports").delete().eq("id", id);
   saveLocal(next);
