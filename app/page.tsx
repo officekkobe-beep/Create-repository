@@ -77,6 +77,7 @@ import {
   type SortingCountKey,
   type SortingCountState
 } from "@/lib/sorting-count";
+import { SupabaseConnectionProblemPanel } from "@/components/SupabaseConnectionProblemPanel";
 import type {
   AppData,
   AuditLog,
@@ -275,6 +276,7 @@ export default function Home() {
   const [recentLocalBackups, setRecentLocalBackups] = useState<RecentLocalBackup[]>([]);
   const [backupPreview, setBackupPreview] = useState<BackupPreview | null>(null);
   const [message, setMessage] = useState("");
+  const [connectionWarning, setConnectionWarning] = useState("");
   const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
   const [closingNote, setClosingNote] = useState("");
   const [reopenReason, setReopenReason] = useState("");
@@ -284,6 +286,7 @@ export default function Home() {
     fetchData().then((result) => {
       setData(result.data);
       setMode(result.mode);
+      setConnectionWarning(result.error ?? "");
       setSortingForm(blankSorting(result.data));
       setSortingCountState(emptySortingCountState());
       const firstWorkType = result.data.workTypes.find((workType) => workType.active)?.id ?? "sorting";
@@ -920,8 +923,9 @@ export default function Home() {
 
       <div className="mx-auto max-w-7xl px-4 py-6">
         {message ? <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">{message}</div> : null}
+        {connectionWarning ? <div className="mb-4"><SupabaseConnectionProblemPanel detail={connectionWarning} /></div> : null}
 
-        {mainTab === "input" ? (
+        {!connectionWarning && mainTab === "input" ? (
           <section className="panel p-5">
             <h2 className="text-xl font-bold">作業入力</h2>
             <div className="mt-4 grid gap-2 sm:grid-cols-3">
@@ -956,7 +960,7 @@ export default function Home() {
           </section>
         ) : null}
 
-        {mainTab === "summary" ? (
+        {!connectionWarning && mainTab === "summary" ? (
           <section className="space-y-6">
             <MonthHeader title="月次集計" description="仕訳作業と月次作業の集計を確認します。" month={month} setMonth={setMonth} action={<div className="flex flex-wrap gap-2"><button className="button-secondary" onClick={() => exportCsv(() => downloadMonthlyCsv(month, sortingSummary.rows, sortingSummary.clientRows))}>仕訳月次集計CSV出力</button><button className="button-primary" onClick={() => exportCsv(() => downloadMonthlyWorkSummaryCsv(month, monthlySummary.rows))}>月次作業集計CSV出力</button></div>} />
             <SummaryCards sortingSummary={sortingSummary} monthlySummary={monthlySummary} />
@@ -965,7 +969,7 @@ export default function Home() {
           </section>
         ) : null}
 
-        {mainTab === "closing" ? (
+        {!connectionWarning && mainTab === "closing" ? (
           <MonthlyClosingPanel
             month={month}
             setMonth={setMonth}
@@ -989,14 +993,14 @@ export default function Home() {
           />
         ) : null}
 
-        {mainTab === "outsource" ? (
+        {!connectionWarning && mainTab === "outsource" ? (
           <section className="space-y-6">
             <MonthHeader title="外注費支払" description="対象月の担当者別支払額と明細を確認します。" month={month} setMonth={setMonth} action={<div className="flex flex-wrap gap-2"><button className="button-secondary" onClick={() => exportCsv(() => downloadOutsourcePaymentSummaryCsv(month, outsourceSummary.rows))}>外注費支払一覧CSV出力</button><button className="button-secondary" onClick={() => exportCsv(() => downloadOutsourcePaymentDetailCsv(month, outsourceSummary.rows))}>外注費支払明細CSV出力</button></div>} />
             <OutsourcePaymentTable rows={outsourceSummary.rows} selectedWorkerId={selectedOutsourceWorkerId} setSelectedWorkerId={setSelectedOutsourceWorkerId} onPrint={printPaymentStatement} />
           </section>
         ) : null}
 
-        {mainTab === "more" ? (
+        {!connectionWarning && mainTab === "more" ? (
           <section className="space-y-6">
             <div className="panel p-4">
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
@@ -1065,7 +1069,7 @@ export default function Home() {
           </section>
         ) : null}
       </div>
-      {confirmKind ? (
+      {!connectionWarning && confirmKind ? (
         <ConfirmModal
           rows={confirmKind === "sorting" ? sortingPreviewRows() : monthlyPreviewRows()}
           onCancel={() => setConfirmKind(null)}

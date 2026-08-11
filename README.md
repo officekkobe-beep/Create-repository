@@ -708,3 +708,27 @@ PC内だけでなく、Google DriveやOneDriveなど別の場所にもコピー�
 - 確定解除後に修正した場合は、再度バックアップを取ってから月次確定してください。
 
 Supabaseを利用している場合は、`supabase/schema.sql` を再実行して、`monthly_closings`、`backup_records`、`audit_logs` テーブルを追加してください。既存データを削除しない安全な追加SQLですが、実行前にはバックアップ取得をおすすめします。
+
+## データが消えたように見える場合
+
+画面上のデータが空に見える場合でも、Supabase上のデータが削除されたとは限りません。まず以下を確認してください。
+
+1. 画面上部の「保存先」が `Supabase` になっているか確認します。
+2. `ローカル` と表示されている場合は、Vercelの環境変数 `NEXT_PUBLIC_SUPABASE_URL` と `NEXT_PUBLIC_SUPABASE_ANON_KEY` が未設定、またはPreview/Productionで設定先が違う可能性があります。
+3. `vercel.app` の長いPreview URLで開いている場合、Production URLとは環境変数や保存先が違うことがあります。通常運用ではProduction URLを開いてください。
+4. Supabase SQL Editorで `select count(*) from daily_reports;`、`select count(*) from monthly_work_reports;` を実行し、データが残っているか確認します。
+5. Supabase読み込みに失敗している場合は、画面に赤い警告が表示されます。警告内容に従って、Vercel環境変数、Supabaseテーブル、RLS policyを確認してください。
+
+このアプリは、起動時やリロード時にSupabase上の作業履歴を削除する処理を持たない設計です。空表示になった場合は、まず「接続先がSupabaseになっているか」「正しいVercel URLを開いているか」を確認してください。
+
+## Supabase自動一時停止の予防（Vercel Cron）
+
+Supabase無料プランは、一定期間（7日間）アクセスがないとプロジェクトが自動的に一時停止します。これを防ぐため、`vercel.json` にVercel Cronの設定を追加しています。
+
+- 実行先: `/api/cron/keep-alive`（`app/api/cron/keep-alive/route.ts`）
+- 実行頻度: 毎日1回（UTC 3:00 = 日本時間12:00）
+- 処理内容: Supabaseへ軽い読み取りクエリ（`clients` テーブルを1件だけ取得）を送るだけで、データの作成・更新・削除は行いません
+
+Vercelにデプロイすると、この設定は自動的に有効になります。VercelのHobby（無料）プランでも1日1回のCronは利用できるため、追加費用はかかりません。Cronの実行状況は、Vercelのプロジェクト画面の「Cron Jobs」タブから確認できます。
+
+このCronはあくまで自動停止を予防するためのものです。停止してしまった場合や、Cronが動く前に停止していた場合は、上記の「データが消えたように見える場合」の手順、または画面の赤い警告に従ってSupabaseダッシュボードで「Resume project」を実行してください。

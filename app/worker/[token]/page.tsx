@@ -14,6 +14,7 @@ import {
 } from "@/lib/sorting-count";
 import { fetchData, isMonthClosed, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
 import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
+import { SupabaseConnectionProblemPanel } from "@/components/SupabaseConnectionProblemPanel";
 
 type WorkKind = "sorting" | string;
 type ConfirmKind = "sorting" | "monthly" | null;
@@ -90,6 +91,7 @@ export default function WorkerInputPage() {
   const [worker, setWorker] = useState<Worker | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [connectionWarning, setConnectionWarning] = useState("");
   const [workKind, setWorkKind] = useState<WorkKind>("sorting");
   const [sortingForm, setSortingForm] = useState<ReportInput>(blankSorting("", emptyData));
   const [monthlyForm, setMonthlyForm] = useState<MonthlyWorkReportInput>(blankMonthly("", emptyData, "sorting"));
@@ -101,6 +103,7 @@ export default function WorkerInputPage() {
       const link = result.data.workerShareLinks.find((item) => item.token === token && item.active);
       const matchedWorker = link ? result.data.workers.find((item) => item.id === link.workerId && item.active) : undefined;
       setData(result.data);
+      setConnectionWarning(result.error ?? "");
       setWorker(matchedWorker ?? null);
       if (matchedWorker) {
         const firstWorkTypeId = result.data.workTypes.find((workType) => workType.active)?.id ?? "sorting";
@@ -254,6 +257,19 @@ export default function WorkerInputPage() {
   }
 
   if (loading) return <main className="min-h-screen bg-slate-50 p-5"><div className="mx-auto max-w-md rounded-lg bg-white p-5 text-sm text-slate-600 shadow-soft">読み込み中です。</div></main>;
+  if (connectionWarning) {
+    return (
+      <main className="min-h-screen bg-slate-50 px-4 py-5">
+        <section className="mx-auto max-w-md space-y-4">
+          <div className="rounded-xl bg-white p-5 shadow-soft">
+            <p className="text-sm font-bold text-red-700">現在入力できません</p>
+            <p className="mt-1 text-sm text-slate-600">Supabaseへの接続が回復するまで、この画面からの入力はできません。</p>
+          </div>
+          <SupabaseConnectionProblemPanel detail={connectionWarning} />
+        </section>
+      </main>
+    );
+  }
   if (!worker) return <main className="min-h-screen bg-slate-50 p-5"><div className="mx-auto max-w-md rounded-lg bg-white p-5 text-sm font-semibold text-slate-700 shadow-soft">この入力リンクは現在利用できません</div></main>;
 
   return (

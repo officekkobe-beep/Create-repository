@@ -358,9 +358,15 @@ export async function createSampleData(current: AppData) {
   return next;
 }
 
-export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "local" }> {
+export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "local"; error?: string }> {
   const supabase = supabaseClient();
-  if (!supabase) return { data: loadLocal(), mode: "local" };
+  if (!supabase) {
+    return {
+      data: loadLocal(),
+      mode: "local",
+      error: "Supabase環境変数が設定されていないため、ブラウザ内のローカル保存で表示しています。Vercelの環境変数を確認してください。"
+    };
+  }
 
   const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult, monthlyClosingsResult, backupRecordsResult, auditLogsResult] = await Promise.all([
     supabase.from("workers").select("*").order("name"),
@@ -379,11 +385,26 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
   ]);
 
   if (workersResult.error || clientsResult.error || reportsResult.error || workTypesResult.error || unitPricesResult.error || sortingUnitPricesResult.error || workerOutsourcePricesResult.error || workerShareLinksResult.error || paymentStatementSettingsResult.error || monthlyWorkReportsResult.error) {
+    const error =
+      workersResult.error ??
+      clientsResult.error ??
+      reportsResult.error ??
+      workTypesResult.error ??
+      unitPricesResult.error ??
+      sortingUnitPricesResult.error ??
+      workerOutsourcePricesResult.error ??
+      workerShareLinksResult.error ??
+      paymentStatementSettingsResult.error ??
+      monthlyWorkReportsResult.error;
     console.warn(
       "Supabase fetch failed. Local sample data will not be merged.",
-      workersResult.error ?? clientsResult.error ?? reportsResult.error ?? workTypesResult.error ?? unitPricesResult.error ?? sortingUnitPricesResult.error ?? workerOutsourcePricesResult.error ?? workerShareLinksResult.error ?? paymentStatementSettingsResult.error ?? monthlyWorkReportsResult.error
+      error
     );
-    return { data: emptyAppData(), mode: "supabase" };
+    return {
+      data: loadLocal(),
+      mode: "local",
+      error: `Supabaseの読み込みに失敗しました。データは削除されていない可能性があります。Vercel環境変数、Supabaseテーブル、RLS policyを確認してください。詳細: ${error?.message ?? "不明なエラー"}`
+    };
   }
 
   return {
