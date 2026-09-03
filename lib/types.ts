@@ -21,6 +21,7 @@ export type Client = {
   name: string;
   code: string;
   active: boolean;
+  closingMonth: number;
   createdAt: string;
 };
 
@@ -36,6 +37,12 @@ export type DailyReport = {
   memo: string;
   source: ReportSource;
   sourceWorkerId: string;
+  fiscalYear: number;
+  fiscalYearLabel: string;
+  clientClosingMonth: number;
+  clientFiscalStartMonth: number;
+  previousTotalJournalCount: number;
+  currentTotalJournalCount: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -173,7 +180,11 @@ export type AuditLog = {
   createdAt: string;
 };
 
-export type ReportInput = Omit<DailyReport, "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt"> & Partial<Pick<DailyReport, "source" | "sourceWorkerId">>;
+export type ReportInput = Omit<
+  DailyReport,
+  "id" | "workMonth" | "source" | "sourceWorkerId" | "fiscalYearLabel" | "clientClosingMonth" | "clientFiscalStartMonth" | "previousTotalJournalCount" | "currentTotalJournalCount" | "createdAt" | "updatedAt"
+> &
+  Partial<Pick<DailyReport, "source" | "sourceWorkerId">>;
 
 export type MonthlyWorkReportInput = Omit<MonthlyWorkReport, "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt"> & Partial<Pick<MonthlyWorkReport, "source" | "sourceWorkerId">>;
 
@@ -191,6 +202,7 @@ export type SummaryRow = {
   smartFreeAppliedCount: number;
   invoiceTargetCount: number;
   autoWorkCount: number;
+  fiscalYearLabels: string;
 };
 
 export type ClientSummaryRow = {
@@ -218,6 +230,7 @@ export type ClientSummaryRow = {
   manualOutsourceCost: number;
   smartOutsourceCost: number;
   sortingOutsourceCost: number;
+  fiscalYearLabels: string;
 };
 
 export type MonthlyWorkSummaryRow = {

@@ -50,9 +50,9 @@ export const sampleData: AppData = {
     { id: "worker-c", code: "W003", name: "田中 美咲", active: true, createdAt: today }
   ],
   clients: [
-    { id: "client-a", name: "青山商事", code: "A001", active: true, createdAt: today },
-    { id: "client-b", name: "北浜物流", code: "B002", active: true, createdAt: today },
-    { id: "client-c", name: "中央フーズ", code: "C003", active: true, createdAt: today }
+    { id: "client-a", name: "青山商事", code: "A001", active: true, closingMonth: 3, createdAt: today },
+    { id: "client-b", name: "北浜物流", code: "B002", active: true, closingMonth: 3, createdAt: today },
+    { id: "client-c", name: "中央フーズ", code: "C003", active: true, closingMonth: 3, createdAt: today }
   ],
   reports: [
     {
@@ -67,6 +67,12 @@ export const sampleData: AppData = {
       memo: "月初処理",
       source: "admin",
       sourceWorkerId: "",
+      fiscalYear: 2026,
+      fiscalYearLabel: "2026年度",
+      clientClosingMonth: 3,
+      clientFiscalStartMonth: 4,
+      previousTotalJournalCount: 0,
+      currentTotalJournalCount: 320,
       createdAt: today,
       updatedAt: today
     },
@@ -82,6 +88,12 @@ export const sampleData: AppData = {
       memo: "",
       source: "admin",
       sourceWorkerId: "",
+      fiscalYear: 2026,
+      fiscalYearLabel: "2026年度",
+      clientClosingMonth: 3,
+      clientFiscalStartMonth: 4,
+      previousTotalJournalCount: 320,
+      currentTotalJournalCount: 466,
       createdAt: today,
       updatedAt: today
     },
@@ -97,6 +109,12 @@ export const sampleData: AppData = {
       memo: "取込確認済み",
       source: "admin",
       sourceWorkerId: "",
+      fiscalYear: 2026,
+      fiscalYearLabel: "2026年度",
+      clientClosingMonth: 3,
+      clientFiscalStartMonth: 4,
+      previousTotalJournalCount: 0,
+      currentTotalJournalCount: 810,
       createdAt: today,
       updatedAt: today
     }

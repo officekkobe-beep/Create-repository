@@ -24,11 +24,23 @@ function grossRate(revenue: number, profit: number) {
 export function downloadSortingDailyReportCsv(month: string, reports: DailyReport[], data: AppData) {
   const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
-  const header = ["作業月", "作業日", "担当者", "顧問先", "手入力件数", "スマート取込件数", "総仕訳数", "メモ"];
+  const header = ["作業月", "作業日", "対象年度", "決算月", "担当者", "顧問先", "手入力件数", "スマート取込件数", "前回総仕訳数", "総仕訳数", "メモ"];
   const lines = [
     header.map(escapeCell).join(","),
     ...reports.map((report) =>
-      [month, report.workDate, workers.get(report.workerId) ?? "未設定", clients.get(report.clientId) ?? "未設定", report.manualCount, report.smartImportCount, report.totalSortingCount, report.memo]
+      [
+        month,
+        report.workDate,
+        report.fiscalYearLabel,
+        `${report.clientClosingMonth}月`,
+        workers.get(report.workerId) ?? "未設定",
+        clients.get(report.clientId) ?? "未設定",
+        report.manualCount,
+        report.smartImportCount,
+        report.previousTotalJournalCount,
+        report.totalSortingCount,
+        report.memo
+      ]
         .map(escapeCell)
         .join(",")
     )
@@ -40,6 +52,7 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
   const workerHeader = [
     "月",
     "顧問先",
+    "対象年度",
     "担当者",
     "手入力実件数",
     "手入力控除件数",
@@ -53,6 +66,7 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
   const clientHeader = [
     "月",
     "顧問先",
+    "対象年度",
     "手入力実件数",
     "手入力控除件数",
     "手入力請求対象件数",
@@ -75,6 +89,7 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
       [
         month,
         row.clientName,
+        row.fiscalYearLabels,
         row.workerName,
         row.manualCount,
         row.manualFreeAppliedCount,
@@ -95,6 +110,7 @@ export function downloadMonthlyCsv(month: string, rows: SummaryRow[], clientRows
       [
         month,
         row.clientName,
+        row.fiscalYearLabels,
         row.manualCount,
         row.manualFreeAppliedCount,
         row.manualBillableCount,
@@ -172,6 +188,7 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
   const header = [
     "作業月",
     "顧問先",
+    "仕訳作業対象年度",
     "仕訳日報売上",
     "提出書類売上",
     "その他事務業務売上",
@@ -200,6 +217,7 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
       return [
         month,
         row.clientName,
+        row.sortingDetail?.fiscalYearLabels ?? "",
         row.sortingRevenue,
         row.submittedDocumentsRevenue,
         row.officeWorkRevenue,

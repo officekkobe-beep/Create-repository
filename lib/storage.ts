@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { monthFromDate } from "./calculations";
+import { monthFromDate, findPreviousReport } from "./calculations";
+import { fiscalStartMonth, fiscalYearFromDate, fiscalYearLabel, normalizeClosingMonth } from "./fiscal-year";
 import { defaultPaymentStatementSettings, sampleData } from "./sample-data";
 import type { AppData, AuditLog, BackupRecord, Client, DailyReport, MonthlyClosing, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkType } from "./types";
 
@@ -75,16 +76,32 @@ function emptyAppData(): AppData {
 function normalizeData(data: Partial<AppData>): AppData {
   const workers = makeUniqueCodes((data.workers ?? []).map((worker) => ({ ...worker, code: worker.code || "" })), "W");
   const workTypes = makeUniqueCodes((data.workTypes ?? []).map((workType) => ({ ...workType, code: workType.code || "" })), "T");
+  const clients = (data.clients ?? []).map((client) => ({ ...client, closingMonth: normalizeClosingMonth(client.closingMonth) }));
+  const closingMonthByClientId = new Map(clients.map((client) => [client.id, client.closingMonth]));
   return {
     workers,
-    clients: data.clients ?? [],
+    clients,
     workTypes,
     unitPrices: (data.unitPrices ?? []).map((price) => ({ ...price, outsourceAmount: price.outsourceAmount ?? price.costAmount ?? 0 })),
     sortingUnitPrices: data.sortingUnitPrices ?? [],
     workerOutsourcePrices: data.workerOutsourcePrices ?? [],
     workerShareLinks: data.workerShareLinks ?? [],
     paymentStatementSettings: { ...defaultPaymentStatementSettings, ...(data.paymentStatementSettings ?? {}) },
-    reports: (data.reports ?? []).map((report) => ({ ...report, source: report.source ?? "admin", sourceWorkerId: report.sourceWorkerId ?? "" })),
+    reports: (data.reports ?? []).map((report) => {
+      const clientClosingMonth = normalizeClosingMonth(report.clientClosingMonth ?? closingMonthByClientId.get(report.clientId));
+      const fiscalYear = Number.isInteger(report.fiscalYear) ? report.fiscalYear : fiscalYearFromDate(report.workDate, clientClosingMonth);
+      return {
+        ...report,
+        source: report.source ?? "admin",
+        sourceWorkerId: report.sourceWorkerId ?? "",
+        fiscalYear,
+        fiscalYearLabel: report.fiscalYearLabel ?? fiscalYearLabel(fiscalYear),
+        clientClosingMonth,
+        clientFiscalStartMonth: Number.isInteger(report.clientFiscalStartMonth) ? report.clientFiscalStartMonth : fiscalStartMonth(clientClosingMonth),
+        previousTotalJournalCount: report.previousTotalJournalCount ?? 0,
+        currentTotalJournalCount: report.currentTotalJournalCount ?? report.totalSortingCount
+      };
+    }),
     monthlyWorkReports: (data.monthlyWorkReports ?? []).map((report) => ({ ...report, workerId: report.workerId ?? workers[0]?.id ?? "", source: report.source ?? "admin", sourceWorkerId: report.sourceWorkerId ?? "" })),
     monthlyClosings: data.monthlyClosings ?? [],
     backupRecords: data.backupRecords ?? [],
@@ -106,9 +123,12 @@ function saveLocal(data: AppData) {
 }
 
 function toReport(row: Record<string, unknown>): DailyReport {
+  const workDate = String(row.work_date);
+  const clientClosingMonth = normalizeClosingMonth(row.client_closing_month as number | undefined);
+  const fiscalYear = Number.isInteger(row.fiscal_year) ? Number(row.fiscal_year) : Number(workDate.slice(0, 4)) || new Date().getFullYear();
   return {
     id: String(row.id),
-    workDate: String(row.work_date),
+    workDate,
     workMonth: String(row.work_month),
     workerId: String(row.worker_id),
     clientId: String(row.client_id),
@@ -118,6 +138,12 @@ function toReport(row: Record<string, unknown>): DailyReport {
     memo: String(row.memo ?? ""),
     source: row.source === "worker_link" ? "worker_link" : "admin",
     sourceWorkerId: String(row.source_worker_id ?? ""),
+    fiscalYear,
+    fiscalYearLabel: String(row.fiscal_year_label ?? fiscalYearLabel(fiscalYear)),
+    clientClosingMonth,
+    clientFiscalStartMonth: Number.isInteger(row.client_fiscal_start_month) ? Number(row.client_fiscal_start_month) : fiscalStartMonth(clientClosingMonth),
+    previousTotalJournalCount: Number(row.previous_total_journal_count ?? 0),
+    currentTotalJournalCount: Number(row.current_total_journal_count ?? row.total_sorting_count ?? 0),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
   };
@@ -136,6 +162,12 @@ function fromReport(input: DailyReport) {
     memo: input.memo,
     source: input.source,
     source_worker_id: input.sourceWorkerId,
+    fiscal_year: input.fiscalYear,
+    fiscal_year_label: input.fiscalYearLabel,
+    client_closing_month: input.clientClosingMonth,
+    client_fiscal_start_month: input.clientFiscalStartMonth,
+    previous_total_journal_count: input.previousTotalJournalCount,
+    current_total_journal_count: input.currentTotalJournalCount,
     created_at: input.createdAt,
     updated_at: input.updatedAt
   };
@@ -312,7 +344,7 @@ export async function createSampleData(current: AppData) {
     const missingMonthlyReports = sampleData.monthlyWorkReports.filter((sample) => !current.monthlyWorkReports.some((item) => item.id === sample.id));
 
     if (missingWorkers.length) await supabase.from("workers").upsert(missingWorkers.map((worker) => ({ id: worker.id, worker_code: worker.code, name: worker.name, active: true, is_active: true, created_at: worker.createdAt })));
-    if (missingClients.length) await supabase.from("clients").upsert(missingClients.map((client) => ({ id: client.id, name: client.name, code: client.code, active: true, is_active: true, created_at: client.createdAt })));
+    if (missingClients.length) await supabase.from("clients").upsert(missingClients.map((client) => ({ id: client.id, name: client.name, code: client.code, active: true, is_active: true, closing_month: normalizeClosingMonth(client.closingMonth), created_at: client.createdAt })));
     if (missingWorkTypes.length) await supabase.from("work_types").upsert(missingWorkTypes.map((workType) => ({ id: workType.id, work_type_code: workType.code, name: workType.name, unit: workType.unit, unit_type: workType.unit, active: workType.active, is_active: workType.active, created_at: workType.createdAt })));
     if (missingUnitPrices.length) await supabase.from("unit_prices").upsert(
       missingUnitPrices.map((price) => ({
@@ -422,6 +454,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
         name: row.name,
         code: row.code,
         active: row.is_active ?? row.active ?? true,
+        closingMonth: normalizeClosingMonth(row.closing_month),
         createdAt: row.created_at
       })),
       reports: (reportsResult.data ?? []).map(toReport),
@@ -624,10 +657,11 @@ export async function upsertClient(client: Partial<Client> & Pick<Client, "name"
     name: client.name.trim(),
     code,
     active: client.active ?? true,
+    closingMonth: normalizeClosingMonth(client.closingMonth),
     createdAt: client.createdAt ?? nowIso()
   };
   const next = { ...current, clients: [...current.clients.filter((item) => item.id !== record.id), record] };
-  if (supabase) await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, created_at: record.createdAt });
+  if (supabase) await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, closing_month: record.closingMonth, created_at: record.createdAt });
   saveLocal(next);
   return next;
 }
@@ -891,18 +925,45 @@ export async function upsertReport(input: Partial<DailyReport> & ReportInput, cu
     await recordBlockedClosedMonth(current, workMonth, CLOSED_MONTH_MESSAGE);
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
+  const id = input.id ?? createId("report");
+  const client = current.clients.find((item) => item.id === input.clientId);
+  const clientClosingMonth = normalizeClosingMonth(client?.closingMonth);
+  const fiscalYear = Number(input.fiscalYear);
+  const manualCount = Number(input.manualCount);
+  const smartImportCount = Number(input.smartImportCount);
+  const totalSortingCount = Number(input.totalSortingCount);
+  const previous = findPreviousReport(current.reports, {
+    id,
+    clientId: input.clientId,
+    workDate: input.workDate,
+    createdAt: existing?.createdAt ?? nowIso(),
+    fiscalYear
+  });
+  const previousTotalJournalCount = previous?.totalSortingCount ?? 0;
+  if (totalSortingCount < previousTotalJournalCount) {
+    throw new Error("同じ対象年度内で今回総仕訳数が前回総仕訳数を下回っています。対象年度または総仕訳数を確認してください。");
+  }
+  if (totalSortingCount - previousTotalJournalCount !== manualCount + smartImportCount) {
+    throw new Error("今回作業件数と、手入力件数＋スマート取込件数が一致していません。");
+  }
   const record: DailyReport = {
-    id: input.id ?? createId("report"),
+    id,
     workDate: input.workDate,
     workMonth,
     workerId: input.workerId,
     clientId: input.clientId,
-    manualCount: Number(input.manualCount),
-    smartImportCount: Number(input.smartImportCount),
-    totalSortingCount: Number(input.totalSortingCount),
+    manualCount,
+    smartImportCount,
+    totalSortingCount,
     memo: input.memo.trim(),
     source: input.source ?? existing?.source ?? "admin",
     sourceWorkerId: input.sourceWorkerId ?? existing?.sourceWorkerId ?? "",
+    fiscalYear,
+    fiscalYearLabel: fiscalYearLabel(fiscalYear),
+    clientClosingMonth,
+    clientFiscalStartMonth: fiscalStartMonth(clientClosingMonth),
+    previousTotalJournalCount,
+    currentTotalJournalCount: totalSortingCount,
     createdAt: existing?.createdAt ?? nowIso(),
     updatedAt: nowIso()
   };

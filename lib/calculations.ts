@@ -46,9 +46,9 @@ export function getCurrentMonth() {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
-export function findPreviousReport(reports: DailyReport[], report: Pick<DailyReport, "id" | "clientId" | "workDate" | "createdAt">) {
+export function findPreviousReport(reports: DailyReport[], report: Pick<DailyReport, "id" | "clientId" | "workDate" | "createdAt" | "fiscalYear">) {
   return reports
-    .filter((item) => item.clientId === report.clientId && item.id !== report.id)
+    .filter((item) => item.clientId === report.clientId && item.fiscalYear === report.fiscalYear && item.id !== report.id)
     .filter((item) => item.workDate < report.workDate || (item.workDate === report.workDate && item.createdAt < report.createdAt))
     .sort((a, b) => `${b.workDate}-${b.createdAt}`.localeCompare(`${a.workDate}-${a.createdAt}`))[0];
 }
@@ -143,6 +143,8 @@ export function buildMonthlySummary(data: AppData, month: string) {
   const smartPrice = data.sortingUnitPrices.find((price) => price.id === "smart") ?? { amount: 40, costAmount: 0 };
   const rowMap = new Map<string, SummaryRow>();
   const clientMap = new Map<string, ClientSummaryRow>();
+  const fiscalYearLabelsByRowKey = new Map<string, Set<string>>();
+  const fiscalYearLabelsByClient = new Map<string, Set<string>>();
 
   monthlyReports.forEach((report) => {
     const key = `${report.workerId}-${report.clientId}`;
@@ -161,7 +163,8 @@ export function buildMonthlySummary(data: AppData, month: string) {
         smartBillableCount: 0,
         smartFreeAppliedCount: 0,
         invoiceTargetCount: 0,
-        autoWorkCount: 0
+        autoWorkCount: 0,
+        fiscalYearLabels: ""
       };
     const manualFreeApplied = manualFreeByReport.get(report.id) ?? 0;
     const billable = manualBillableByReport.get(report.id) ?? 0;
@@ -175,6 +178,10 @@ export function buildMonthlySummary(data: AppData, month: string) {
     row.smartFreeAppliedCount += smartFreeApplied;
     row.invoiceTargetCount += billable + smartBillable;
     row.autoWorkCount += calculateAutoWorkCount(data.reports, report);
+    const rowLabels = fiscalYearLabelsByRowKey.get(key) ?? new Set<string>();
+    rowLabels.add(report.fiscalYearLabel);
+    fiscalYearLabelsByRowKey.set(key, rowLabels);
+    row.fiscalYearLabels = Array.from(rowLabels).sort().join(" / ");
     rowMap.set(key, row);
 
     const clientRow =
@@ -203,8 +210,13 @@ export function buildMonthlySummary(data: AppData, month: string) {
         sortingGrossProfit: 0,
         manualOutsourceCost: 0,
         smartOutsourceCost: 0,
-        sortingOutsourceCost: 0
+        sortingOutsourceCost: 0,
+        fiscalYearLabels: ""
       };
+    const clientLabels = fiscalYearLabelsByClient.get(report.clientId) ?? new Set<string>();
+    clientLabels.add(report.fiscalYearLabel);
+    fiscalYearLabelsByClient.set(report.clientId, clientLabels);
+    clientRow.fiscalYearLabels = Array.from(clientLabels).sort().join(" / ");
     const outsourcePrice = workerOutsourcePrice(data, report.workerId);
     clientRow.manualCount += report.manualCount;
     clientRow.manualFreeAppliedCount += manualFreeApplied;

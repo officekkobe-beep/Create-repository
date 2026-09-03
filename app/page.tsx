@@ -78,6 +78,7 @@ import {
   type SortingCountState
 } from "@/lib/sorting-count";
 import { SupabaseConnectionProblemPanel } from "@/components/SupabaseConnectionProblemPanel";
+import { fiscalStartMonth, fiscalYearFromDate, fiscalYearOptions, normalizeClosingMonth } from "@/lib/fiscal-year";
 import type {
   AppData,
   AuditLog,
@@ -216,15 +217,22 @@ function todayDate() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function clientClosingMonth(data: AppData, clientId: string) {
+  return normalizeClosingMonth(data.clients.find((client) => client.id === clientId)?.closingMonth);
+}
+
 function blankSorting(data: AppData): ReportInput {
+  const workDate = todayDate();
+  const clientId = data.clients.find((client) => client.active)?.id ?? "";
   return {
-    workDate: todayDate(),
+    workDate,
     workerId: data.workers.find((worker) => worker.active)?.id ?? "",
-    clientId: data.clients.find((client) => client.active)?.id ?? "",
+    clientId,
     manualCount: 0,
     smartImportCount: 0,
     totalSortingCount: 0,
-    memo: ""
+    memo: "",
+    fiscalYear: fiscalYearFromDate(workDate, clientClosingMonth(data, clientId))
   };
 }
 
@@ -336,10 +344,23 @@ export default function Home() {
       id: editingSorting?.id ?? "",
       clientId: sortingForm.clientId,
       workDate: sortingForm.workDate,
-      createdAt: editingSorting?.createdAt ?? new Date().toISOString()
+      createdAt: editingSorting?.createdAt ?? new Date().toISOString(),
+      fiscalYear: sortingForm.fiscalYear
     });
-  }, [data.reports, editingSorting, sortingForm.clientId, sortingForm.workDate]);
+  }, [data.reports, editingSorting, sortingForm.clientId, sortingForm.workDate, sortingForm.fiscalYear]);
   const previousTotalSortingCount = previousSorting?.totalSortingCount;
+  const sortingClosingMonth = clientClosingMonth(data, sortingForm.clientId);
+  const sortingFiscalStartMonth = fiscalStartMonth(sortingClosingMonth);
+  const sortingAutoFiscalYear = fiscalYearFromDate(sortingForm.workDate, sortingClosingMonth);
+  const sortingFiscalYearChoices = fiscalYearOptions(sortingAutoFiscalYear, sortingForm.fiscalYear);
+
+  function changeSortingWorkDate(value: string) {
+    setSortingForm({ ...sortingForm, workDate: value, fiscalYear: fiscalYearFromDate(value, sortingClosingMonth) });
+  }
+
+  function changeSortingClient(value: string) {
+    setSortingForm({ ...sortingForm, clientId: value, fiscalYear: fiscalYearFromDate(sortingForm.workDate, clientClosingMonth(data, value)) });
+  }
 
   useEffect(() => {
     if (workKind !== "sorting") return;
@@ -439,7 +460,7 @@ export default function Home() {
     const smart = parseCountInput(sortingCountState.inputs.smartImportCount);
     const previous = previousTotalSortingCount ?? 0;
     if (total === null || manual === null || smart === null) return "総仕訳数、手入力件数、スマート取込件数を入力してください。";
-    if (total - previous < 0) return "入力値を確認してください。計算結果がマイナスになります。";
+    if (total - previous < 0) return "同じ対象年度内で今回総仕訳数が前回総仕訳数を下回っています。対象年度または総仕訳数を確認してください。";
     if (total - previous !== manual + smart) return "今回作業件数と、手入力件数＋スマート取込件数が一致していません。";
     return "";
   }
@@ -461,6 +482,12 @@ export default function Home() {
       memo: sortingForm.memo,
       source: sortingForm.source ?? "admin",
       sourceWorkerId: sortingForm.sourceWorkerId ?? "",
+      fiscalYear: sortingForm.fiscalYear,
+      fiscalYearLabel: `${sortingForm.fiscalYear}年度`,
+      clientClosingMonth: sortingClosingMonth,
+      clientFiscalStartMonth: sortingFiscalStartMonth,
+      previousTotalJournalCount: previous,
+      currentTotalJournalCount: sortingForm.totalSortingCount,
       createdAt: editingSorting?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -476,6 +503,8 @@ export default function Home() {
       ["顧問先", client?.name ?? "未設定"],
       ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
       ["作業種別", "仕訳作業"],
+      ["対象年度", `${sortingForm.fiscalYear}年度`],
+      ["決算月", `${sortingClosingMonth}月`],
       ["前回総仕訳数", `${formatNumber(previous)}件${previousSorting ? "" : "（初回）"}`],
       ["今回総仕訳数", `${formatNumber(sortingForm.totalSortingCount)}件`],
       ["今回作業件数", `${formatNumber(workCount)}件`],
@@ -587,7 +616,7 @@ export default function Home() {
     if (isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
     setWorkKind("sorting");
     setEditingSorting(report);
-    setSortingForm({ workDate: report.workDate, workerId: report.workerId, clientId: report.clientId, manualCount: report.manualCount, smartImportCount: report.smartImportCount, totalSortingCount: report.totalSortingCount, memo: report.memo });
+    setSortingForm({ workDate: report.workDate, workerId: report.workerId, clientId: report.clientId, manualCount: report.manualCount, smartImportCount: report.smartImportCount, totalSortingCount: report.totalSortingCount, memo: report.memo, fiscalYear: report.fiscalYear });
     setSortingCountState(sortingCountStateFromValues(report));
     setMainTab("input");
   }
@@ -937,9 +966,12 @@ export default function Home() {
             {isMonthClosed(data, monthFromDate(workKind === "sorting" ? sortingForm.workDate : monthlyForm.workDate)) ? <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">{CLOSED_MONTH_MESSAGE}</div> : null}
             {workKind === "sorting" ? (
               <form className="mt-5 grid gap-4 lg:grid-cols-2" onSubmit={submitSorting}>
-                <DateField value={sortingForm.workDate} onChange={(value) => setSortingForm({ ...sortingForm, workDate: value })} />
+                <DateField value={sortingForm.workDate} onChange={changeSortingWorkDate} />
                 <SelectField label="担当者" value={sortingForm.workerId} onChange={(value) => setSortingForm({ ...sortingForm, workerId: value })} options={data.workers.filter((item) => item.active).map((item) => ({ value: item.id, label: `${item.code} ${item.name}` }))} />
-                <SelectField label="顧問先" value={sortingForm.clientId} onChange={(value) => setSortingForm({ ...sortingForm, clientId: value })} options={data.clients.filter((item) => item.active).map((item) => ({ value: item.id, label: item.name }))} />
+                <SelectField label="顧問先" value={sortingForm.clientId} onChange={changeSortingClient} options={data.clients.filter((item) => item.active).map((item) => ({ value: item.id, label: item.name }))} />
+                <FiscalYearField value={sortingForm.fiscalYear} onChange={(value) => setSortingForm({ ...sortingForm, fiscalYear: value })} options={sortingFiscalYearChoices} />
+                <Info label="決算月" value={`${sortingClosingMonth}月`} />
+                <Info label="期首月" value={`${sortingFiscalStartMonth}月`} />
                 <SortingCountField label="総仕訳数" value={sortingCountState.inputs.totalSortingCount} onChange={(value) => updateSortingCount("totalSortingCount", value)} auto={sortingCountState.autoField === "totalSortingCount"} help={<SortingCountSummary previousTotal={previousTotalSortingCount} currentTotal={sortingForm.totalSortingCount} />} />
                 <SortingCountField label="手入力件数" value={sortingCountState.inputs.manualCount} onChange={(value) => updateSortingCount("manualCount", value)} auto={sortingCountState.autoField === "manualCount"} />
                 <SortingCountField label="スマート取込件数" value={sortingCountState.inputs.smartImportCount} onChange={(value) => updateSortingCount("smartImportCount", value)} auto={sortingCountState.autoField === "smartImportCount"} />
@@ -1131,6 +1163,10 @@ function SelectField({ label, value, onChange, options }: { label: string; value
   return <Field label={label}><select className="field" required value={value} onChange={(event) => onChange(event.target.value)}><option value="">選択してください</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>;
 }
 
+function FiscalYearField({ value, onChange, options }: { value: number; onChange: (value: number) => void; options: { value: number; label: string }[] }) {
+  return <Field label="対象年度"><select className="field" value={value} onChange={(event) => onChange(Number(event.target.value))}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></Field>;
+}
+
 function MemoField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   return <Field label="メモ" className="lg:col-span-2"><textarea className="field min-h-28" value={value} onChange={(event) => onChange(event.target.value)} /></Field>;
 }
@@ -1300,7 +1336,7 @@ function WorkListPanel(props: { month: string; setMonth: (month: string) => void
 
 function ReportTable({ reports, data, workers, clients, onEdit, onDelete }: { reports: DailyReport[]; data: AppData; workers: Map<string, string>; clients: Map<string, string>; onEdit: (report: DailyReport) => void; onDelete: (id: string) => void }) {
   if (!reports.length) return <Empty text="仕訳作業はありません。" />;
-  return <div className="overflow-x-auto"><table className="w-full min-w-[1080px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">総仕訳数</th><th className="px-4 py-3 text-right">作業件数</th><th className="px-4 py-3">登録元</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{reports.map((report) => { const closed = isMonthClosed(data, report.workMonth); return <tr key={report.id}><td className="table-cell font-semibold">{report.workDate}{closed ? <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">確定済み</span> : null}</td><td className="table-cell">{workers.get(report.workerId) ?? "未設定"}</td><td className="table-cell">{clients.get(report.clientId) ?? "未設定"}</td><td className="table-cell text-right">{formatNumber(report.manualCount)}</td><td className="table-cell text-right">{formatNumber(report.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(report.totalSortingCount)}</td><td className="table-cell text-right">{formatNumber(calculateAutoWorkCount(data.reports, report))}</td><td className="table-cell">{reportSourceLabel(report.source, report.sourceWorkerId, workers)}</td><td className="table-cell text-right"><button className="button-secondary mr-2 disabled:opacity-50" disabled={closed} onClick={() => onEdit(report)}>編集</button><button className="button-danger disabled:opacity-50" disabled={closed} onClick={() => onDelete(report.id)}>削除</button></td></tr>; })}</tbody></table></div>;
+  return <div className="overflow-x-auto"><table className="w-full min-w-[1180px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">対象年度</th><th className="px-4 py-3">担当者</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">総仕訳数</th><th className="px-4 py-3 text-right">作業件数</th><th className="px-4 py-3">登録元</th><th className="px-4 py-3 text-right">操作</th></tr></thead><tbody>{reports.map((report) => { const closed = isMonthClosed(data, report.workMonth); return <tr key={report.id}><td className="table-cell font-semibold">{report.workDate}{closed ? <span className="ml-2 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">確定済み</span> : null}</td><td className="table-cell">{report.fiscalYearLabel}</td><td className="table-cell">{workers.get(report.workerId) ?? "未設定"}</td><td className="table-cell">{clients.get(report.clientId) ?? "未設定"}</td><td className="table-cell text-right">{formatNumber(report.manualCount)}</td><td className="table-cell text-right">{formatNumber(report.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(report.totalSortingCount)}</td><td className="table-cell text-right">{formatNumber(calculateAutoWorkCount(data.reports, report))}</td><td className="table-cell">{reportSourceLabel(report.source, report.sourceWorkerId, workers)}</td><td className="table-cell text-right"><button className="button-secondary mr-2 disabled:opacity-50" disabled={closed} onClick={() => onEdit(report)}>編集</button><button className="button-danger disabled:opacity-50" disabled={closed} onClick={() => onDelete(report.id)}>削除</button></td></tr>; })}</tbody></table></div>;
 }
 
 function MonthlyWorkTable({ reports, data, workers, clients, workTypes, onEdit, onDelete }: { reports: MonthlyWorkReport[]; data: AppData; workers: Map<string, string>; clients: Map<string, string>; workTypes: Map<string, WorkType>; onEdit: (report: MonthlyWorkReport) => void; onDelete: (id: string) => void }) {
@@ -1315,7 +1351,7 @@ function SummaryCards({ sortingSummary, monthlySummary }: { sortingSummary: Retu
 
 function SortingSummaryTable({ rows }: { rows: ReturnType<typeof buildMonthlySummary>["clientRows"] }) {
   if (!rows.length) return <Empty text="仕訳集計がありません。" />;
-  return <section className="panel overflow-hidden"><PanelTitle title="仕訳日報集計" /><div className="overflow-x-auto"><table className="w-full min-w-[1120px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">手入力実件数</th><th className="px-4 py-3 text-right">手入力控除</th><th className="px-4 py-3 text-right">手入力請求対象</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">スマート取込控除</th><th className="px-4 py-3 text-right">スマート取込請求対象</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{rows.map((row) => <tr key={row.clientId}><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell text-right">{formatNumber(row.manualCount)}</td><td className="table-cell text-right">{formatNumber(row.manualFreeAppliedCount)}</td><td className="table-cell text-right">{formatNumber(row.manualBillableCount)}</td><td className="table-cell text-right">{formatNumber(row.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(row.smartFreeAppliedCount)}</td><td className="table-cell text-right">{formatNumber(row.smartBillableCount)}</td><td className="table-cell text-right">{formatCurrency(row.sortingRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.sortingOutsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.sortingRevenue - row.sortingOutsourceCost)}</td></tr>)}</tbody></table></div></section>;
+  return <section className="panel overflow-hidden"><PanelTitle title="仕訳日報集計" /><div className="overflow-x-auto"><table className="w-full min-w-[1220px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">対象年度</th><th className="px-4 py-3 text-right">手入力実件数</th><th className="px-4 py-3 text-right">手入力控除</th><th className="px-4 py-3 text-right">手入力請求対象</th><th className="px-4 py-3 text-right">スマート取込</th><th className="px-4 py-3 text-right">スマート取込控除</th><th className="px-4 py-3 text-right">スマート取込請求対象</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{rows.map((row) => <tr key={row.clientId}><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell">{row.fiscalYearLabels}</td><td className="table-cell text-right">{formatNumber(row.manualCount)}</td><td className="table-cell text-right">{formatNumber(row.manualFreeAppliedCount)}</td><td className="table-cell text-right">{formatNumber(row.manualBillableCount)}</td><td className="table-cell text-right">{formatNumber(row.smartImportCount)}</td><td className="table-cell text-right">{formatNumber(row.smartFreeAppliedCount)}</td><td className="table-cell text-right">{formatNumber(row.smartBillableCount)}</td><td className="table-cell text-right">{formatCurrency(row.sortingRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.sortingOutsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.sortingRevenue - row.sortingOutsourceCost)}</td></tr>)}</tbody></table></div></section>;
 }
 
 function MonthlySummaryTable({ rows }: { rows: ReturnType<typeof buildMonthlyWorkSummary>["rows"] }) {
@@ -1333,7 +1369,7 @@ function BillingTable({ rows }: { rows: ReturnType<typeof buildClientProfitabili
 }
 
 function SortingDetail({ row }: { row: ReturnType<typeof buildMonthlySummary>["clientRows"][number] }) {
-  return <div className="border-t border-line p-5"><h3 className="font-bold">仕訳日報内訳</h3><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><Info label="手入力実件数" value={`${formatNumber(row.manualCount)}件`} /><Info label="手入力請求対象件数" value={`${formatNumber(row.manualBillableCount)}件`} /><Info label="無料枠" value={`${formatNumber(FREE_MANUAL_ALLOWANCE)}件`} /><Info label="手入力控除件数" value={`${formatNumber(row.manualFreeAppliedCount)}件`} /><Info label="手入力売上単価" value={`1件あたり${formatNumber(row.manualRevenueUnitPrice)}円`} /><Info label="手入力売上" value={formatCurrency(row.manualRevenue)} /><Info label="手入力外注単価" value={`1件あたり${formatNumber(row.manualCostUnitPrice)}円`} /><Info label="手入力外注費" value={formatCurrency(row.manualCost)} /><Info label="スマート取込件数" value={`${formatNumber(row.smartImportCount)}件`} /><Info label="スマート取込控除件数" value={`${formatNumber(row.smartFreeAppliedCount)}件`} /><Info label="スマート取込請求対象件数" value={`${formatNumber(row.smartBillableCount)}件`} /><Info label="スマート取込売上単価" value={`1件あたり${formatNumber(row.smartRevenueUnitPrice)}円`} /><Info label="スマート取込売上" value={formatCurrency(row.smartRevenue)} /><Info label="スマート取込外注単価" value={`1件あたり${formatNumber(row.smartCostUnitPrice)}円`} /><Info label="スマート取込外注費" value={formatCurrency(row.smartCost)} /></div></div>;
+  return <div className="border-t border-line p-5"><h3 className="font-bold">仕訳日報内訳</h3><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><Info label="対象年度" value={row.fiscalYearLabels || "なし"} /><Info label="手入力実件数" value={`${formatNumber(row.manualCount)}件`} /><Info label="手入力請求対象件数" value={`${formatNumber(row.manualBillableCount)}件`} /><Info label="無料枠" value={`${formatNumber(FREE_MANUAL_ALLOWANCE)}件`} /><Info label="手入力控除件数" value={`${formatNumber(row.manualFreeAppliedCount)}件`} /><Info label="手入力売上単価" value={`1件あたり${formatNumber(row.manualRevenueUnitPrice)}円`} /><Info label="手入力売上" value={formatCurrency(row.manualRevenue)} /><Info label="手入力外注単価" value={`1件あたり${formatNumber(row.manualCostUnitPrice)}円`} /><Info label="手入力外注費" value={formatCurrency(row.manualCost)} /><Info label="スマート取込件数" value={`${formatNumber(row.smartImportCount)}件`} /><Info label="スマート取込控除件数" value={`${formatNumber(row.smartFreeAppliedCount)}件`} /><Info label="スマート取込請求対象件数" value={`${formatNumber(row.smartBillableCount)}件`} /><Info label="スマート取込売上単価" value={`1件あたり${formatNumber(row.smartRevenueUnitPrice)}円`} /><Info label="スマート取込売上" value={formatCurrency(row.smartRevenue)} /><Info label="スマート取込外注単価" value={`1件あたり${formatNumber(row.smartCostUnitPrice)}円`} /><Info label="スマート取込外注費" value={formatCurrency(row.smartCost)} /></div></div>;
 }
 
 function OutsourcePaymentTable({ rows, selectedWorkerId, setSelectedWorkerId, onPrint }: { rows: WorkerOutsourceSummaryRow[]; selectedWorkerId: string; setSelectedWorkerId: (id: string) => void; onPrint: (row: WorkerOutsourceSummaryRow) => void }) {
@@ -1493,24 +1529,31 @@ function BackupSettingsPanel({
   );
 }
 
+const MONTH_OPTIONS = Array.from({ length: 12 }, (_, index) => index + 1);
+
 function ClientSettings({ data, form, setForm, submit, deactivate, deleteItem }: { data: AppData; form: Partial<Client> & Pick<Client, "name">; setForm: (form: Partial<Client> & Pick<Client, "name">) => void; submit: (event: FormEvent) => void; deactivate: (id: string) => void; deleteItem: (id: string) => void }) {
   const editing = Boolean(form.id);
+  const closingMonth = normalizeClosingMonth(form.closingMonth);
   return (
     <section className="panel overflow-hidden">
-      <PanelTitle title="顧問先設定" description="顧問先コードと顧問先名を編集できます。使用済みの顧問先は削除できないため、無効化してください。" />
+      <PanelTitle title="顧問先設定" description="顧問先コードと顧問先名、決算月を編集できます。使用済みの顧問先は削除できないため、無効化してください。" />
       <div className="border-b border-line p-5">
         <div className="mb-3 text-sm font-bold text-slate-700">{editing ? `編集中: ${form.code} ${form.name}` : "新規追加"}</div>
-        <form className="grid gap-3 md:grid-cols-[160px_1fr_120px_120px]" onSubmit={submit}>
+        <form className="grid gap-3 md:grid-cols-[160px_1fr_120px_120px_120px_120px]" onSubmit={submit}>
           <input className="field" required placeholder="顧問先コード" value={form.code ?? ""} onChange={(event) => setForm({ ...form, code: event.target.value })} />
           <input className="field" required placeholder="顧問先名" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
+          <select className="field" value={closingMonth} onChange={(event) => setForm({ ...form, closingMonth: Number(event.target.value) })}>
+            {MONTH_OPTIONS.map((monthValue) => <option key={monthValue} value={monthValue}>{monthValue}月決算</option>)}
+          </select>
+          <div className="rounded-md border border-line bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-600">期首月: {fiscalStartMonth(closingMonth)}月</div>
           <button className="button-primary" type="submit">保存</button>
-          <button className="button-secondary" type="button" onClick={() => setForm({ name: "", code: "", active: true })}>キャンセル</button>
+          <button className="button-secondary" type="button" onClick={() => setForm({ name: "", code: "", active: true, closingMonth: 3 })}>キャンセル</button>
         </form>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] border-collapse">
-          <thead className="table-head"><tr><th className="px-4 py-3">コード</th><th className="px-4 py-3">顧問先名</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
-          <tbody>{data.clients.map((client) => <tr key={client.id} className={form.id === client.id ? "bg-blue-50" : ""}><td className="table-cell font-semibold">{client.code}</td><td className="table-cell font-semibold">{client.name}</td><td className="table-cell">{client.active ? "有効" : "無効"}</td><td className="table-cell"><div className="flex justify-end gap-2"><button className="button-secondary" type="button" onClick={() => setForm(client)}>編集</button>{client.active ? <button className="button-secondary" type="button" onClick={() => deactivate(client.id)}>無効化</button> : null}<button className="button-danger" type="button" onClick={() => deleteItem(client.id)}>削除</button></div></td></tr>)}</tbody>
+        <table className="w-full min-w-[860px] border-collapse">
+          <thead className="table-head"><tr><th className="px-4 py-3">コード</th><th className="px-4 py-3">顧問先名</th><th className="px-4 py-3">決算月</th><th className="px-4 py-3">期首月</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+          <tbody>{data.clients.map((client) => <tr key={client.id} className={form.id === client.id ? "bg-blue-50" : ""}><td className="table-cell font-semibold">{client.code}</td><td className="table-cell font-semibold">{client.name}</td><td className="table-cell">{normalizeClosingMonth(client.closingMonth)}月</td><td className="table-cell">{fiscalStartMonth(client.closingMonth)}月</td><td className="table-cell">{client.active ? "有効" : "無効"}</td><td className="table-cell"><div className="flex justify-end gap-2"><button className="button-secondary" type="button" onClick={() => setForm(client)}>編集</button>{client.active ? <button className="button-secondary" type="button" onClick={() => deactivate(client.id)}>無効化</button> : null}<button className="button-danger" type="button" onClick={() => deleteItem(client.id)}>削除</button></div></td></tr>)}</tbody>
         </table>
       </div>
     </section>

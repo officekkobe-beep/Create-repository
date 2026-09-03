@@ -15,6 +15,7 @@ import {
 import { fetchData, isMonthClosed, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
 import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
 import { SupabaseConnectionProblemPanel } from "@/components/SupabaseConnectionProblemPanel";
+import { fiscalStartMonth, fiscalYearFromDate, fiscalYearOptions, normalizeClosingMonth } from "@/lib/fiscal-year";
 
 type WorkKind = "sorting" | string;
 type ConfirmKind = "sorting" | "monthly" | null;
@@ -55,17 +56,24 @@ function displayMemo(memo: string) {
   return memo.trim() || "なし";
 }
 
+function clientClosingMonth(data: AppData, clientId: string) {
+  return normalizeClosingMonth(data.clients.find((client) => client.id === clientId)?.closingMonth);
+}
+
 function blankSorting(workerId: string, data: AppData): ReportInput {
+  const workDate = todayDate();
+  const clientId = data.clients.find((client) => client.active)?.id ?? "";
   return {
-    workDate: todayDate(),
+    workDate,
     workerId,
-    clientId: data.clients.find((client) => client.active)?.id ?? "",
+    clientId,
     manualCount: 0,
     smartImportCount: 0,
     totalSortingCount: 0,
     memo: "",
     source: "worker_link",
-    sourceWorkerId: workerId
+    sourceWorkerId: workerId,
+    fiscalYear: fiscalYearFromDate(workDate, clientClosingMonth(data, clientId))
   };
 }
 
@@ -120,11 +128,24 @@ export default function WorkerInputPage() {
       id: "",
       clientId: sortingForm.clientId,
       workDate: sortingForm.workDate,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      fiscalYear: sortingForm.fiscalYear
     });
-  }, [data.reports, sortingForm.clientId, sortingForm.workDate, worker]);
+  }, [data.reports, sortingForm.clientId, sortingForm.workDate, sortingForm.fiscalYear, worker]);
   const previousTotal = previousSorting?.totalSortingCount;
   const selectedWorkType = useMemo(() => data.workTypes.find((workType) => workType.id === monthlyForm.workTypeId), [data.workTypes, monthlyForm.workTypeId]);
+  const sortingClosingMonth = clientClosingMonth(data, sortingForm.clientId);
+  const sortingFiscalStartMonth = fiscalStartMonth(sortingClosingMonth);
+  const sortingAutoFiscalYear = fiscalYearFromDate(sortingForm.workDate, sortingClosingMonth);
+  const sortingFiscalYearChoices = fiscalYearOptions(sortingAutoFiscalYear, sortingForm.fiscalYear);
+
+  function changeSortingWorkDate(value: string) {
+    setSortingForm({ ...sortingForm, workDate: value, fiscalYear: fiscalYearFromDate(value, sortingClosingMonth) });
+  }
+
+  function changeSortingClient(value: string) {
+    setSortingForm({ ...sortingForm, clientId: value, fiscalYear: fiscalYearFromDate(sortingForm.workDate, clientClosingMonth(data, value)) });
+  }
 
   useEffect(() => {
     if (workKind !== "sorting") return;
@@ -170,7 +191,7 @@ export default function WorkerInputPage() {
     const smart = parseCountInput(sortingCountState.inputs.smartImportCount);
     const previous = previousTotal ?? 0;
     if (total === null || manual === null || smart === null) return "総仕訳数、手入力件数、スマート取込件数を入力してください";
-    if (total - previous < 0) return "入力値を確認してください。計算結果がマイナスになります";
+    if (total - previous < 0) return "同じ対象年度内で今回総仕訳数が前回総仕訳数を下回っています。対象年度または総仕訳数を確認してください。";
     if (total - previous !== manual + smart) return "今回作業件数と、手入力件数＋スマート取込件数が一致していません";
     return "";
   }
@@ -236,7 +257,11 @@ export default function WorkerInputPage() {
       ["顧問先", client?.name ?? "未設定"],
       ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
       ["作業種別", "仕訳作業"],
+      ["対象年度", `${sortingForm.fiscalYear}年度`],
+      ["決算月", `${sortingClosingMonth}月`],
+      ["前回総仕訳数", `${formatNumber(previousTotal ?? 0)}件${previousSorting ? "" : "（初回）"}`],
       ["今回総仕訳数", `${formatNumber(sortingForm.totalSortingCount)}件`],
+      ["今回作業件数", `${formatNumber(sortingForm.totalSortingCount - (previousTotal ?? 0))}件`],
       ["手入力件数", `${formatNumber(sortingForm.manualCount)}件`],
       ["スマート取込件数", `${formatNumber(sortingForm.smartImportCount)}件`],
       ["メモ", displayMemo(sortingForm.memo)]
@@ -291,9 +316,14 @@ export default function WorkerInputPage() {
 
         {workKind === "sorting" ? (
           <form className="space-y-4" onSubmit={submitSorting}>
-            <WorkerDateField value={sortingForm.workDate} onChange={(value) => setSortingForm({ ...sortingForm, workDate: value })} />
+            <WorkerDateField value={sortingForm.workDate} onChange={changeSortingWorkDate} />
             <ReadonlyField label="担当者名" value={`${worker.code} ${worker.name}`} />
-            <WorkerSelect label="顧問先" value={sortingForm.clientId} onChange={(value) => setSortingForm({ ...sortingForm, clientId: value })} options={data.clients.filter((client) => client.active).map((client) => ({ value: client.id, label: client.name }))} />
+            <WorkerSelect label="顧問先" value={sortingForm.clientId} onChange={changeSortingClient} options={data.clients.filter((client) => client.active).map((client) => ({ value: client.id, label: client.name }))} />
+            <WorkerFiscalYearSelect value={sortingForm.fiscalYear} onChange={(value) => setSortingForm({ ...sortingForm, fiscalYear: value })} options={sortingFiscalYearChoices} />
+            <div className="grid grid-cols-2 gap-3">
+              <ReadonlyField label="決算月" value={`${sortingClosingMonth}月`} />
+              <ReadonlyField label="期首月" value={`${sortingFiscalStartMonth}月`} />
+            </div>
             <WorkerNumberField label="総仕訳数" value={sortingCountState.inputs.totalSortingCount} onChange={(value) => updateSortingCount("totalSortingCount", value)} auto={sortingCountState.autoField === "totalSortingCount"} help={<SortingHelp previousTotal={previousTotal} currentTotal={sortingForm.totalSortingCount} />} />
             <WorkerNumberField label="手入力件数" value={sortingCountState.inputs.manualCount} onChange={(value) => updateSortingCount("manualCount", value)} auto={sortingCountState.autoField === "manualCount"} />
             <WorkerNumberField label="スマート取込件数" value={sortingCountState.inputs.smartImportCount} onChange={(value) => updateSortingCount("smartImportCount", value)} auto={sortingCountState.autoField === "smartImportCount"} />
@@ -341,6 +371,10 @@ function ReadonlyField({ label, value }: { label: string; value: string }) {
 
 function WorkerSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: { value: string; label: string }[] }) {
   return <WorkerField label={label}><select className="field py-3 text-base" required value={value} onChange={(event) => onChange(event.target.value)}><option value="">選択してください</option>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></WorkerField>;
+}
+
+function WorkerFiscalYearSelect({ value, onChange, options }: { value: number; onChange: (value: number) => void; options: { value: number; label: string }[] }) {
+  return <WorkerField label="対象年度"><select className="field py-3 text-base" value={value} onChange={(event) => onChange(Number(event.target.value))}>{options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></WorkerField>;
 }
 
 function WorkerNumberField({ label, value, onChange, auto, help }: { label: string; value: string; onChange: (value: string) => void; auto: boolean; help?: React.ReactNode }) {

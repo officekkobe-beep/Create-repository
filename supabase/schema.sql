@@ -75,9 +75,58 @@ alter table sorting_unit_prices add column if not exists cost_amount integer not
 alter table workers add column if not exists worker_code text not null default '';
 alter table workers add column if not exists is_active boolean not null default true;
 alter table clients add column if not exists is_active boolean not null default true;
+alter table clients add column if not exists closing_month integer not null default 3 check (closing_month >= 1 and closing_month <= 12);
 alter table work_types add column if not exists work_type_code text not null default '';
 alter table work_types add column if not exists unit_type text not null default 'count' check (unit_type in ('count', 'time'));
 alter table work_types add column if not exists is_active boolean not null default true;
+
+-- 前年度・新年度の並行入力対応: daily_reports に対象年度関連の列を追加する。
+-- NOT NULLやDEFAULTを付けず、既存データはNULLのままバックフィルの対象として扱う。
+alter table daily_reports add column if not exists fiscal_year integer;
+alter table daily_reports add column if not exists fiscal_year_label text;
+alter table daily_reports add column if not exists client_closing_month integer check (client_closing_month >= 1 and client_closing_month <= 12);
+alter table daily_reports add column if not exists client_fiscal_start_month integer check (client_fiscal_start_month >= 1 and client_fiscal_start_month <= 12);
+alter table daily_reports add column if not exists previous_total_journal_count integer check (previous_total_journal_count >= 0);
+alter table daily_reports add column if not exists current_total_journal_count integer check (current_total_journal_count >= 0);
+
+-- 既存データの対象年度を、作業日と顧問先の決算月から補完する（NULLの行だけを対象にした非破壊的なバックフィル）。
+update daily_reports d
+set client_closing_month = coalesce(c.closing_month, 3)
+from clients c
+where c.id = d.client_id and d.client_closing_month is null;
+
+update daily_reports
+set client_closing_month = 3
+where client_closing_month is null;
+
+update daily_reports
+set client_fiscal_start_month = (client_closing_month % 12) + 1
+where client_fiscal_start_month is null;
+
+update daily_reports
+set fiscal_year = case
+  when extract(month from work_date) <= client_closing_month
+    then extract(year from work_date)::integer - 1
+  else extract(year from work_date)::integer
+end
+where fiscal_year is null;
+
+update daily_reports
+set fiscal_year_label = fiscal_year || '年度'
+where fiscal_year_label is null;
+
+update daily_reports
+set current_total_journal_count = total_sorting_count
+where current_total_journal_count is null;
+
+with ordered as (
+  select id, lag(total_sorting_count) over (partition by client_id, fiscal_year order by work_date, created_at) as prev_total
+  from daily_reports
+)
+update daily_reports d
+set previous_total_journal_count = coalesce(ordered.prev_total, 0)
+from ordered
+where d.id = ordered.id and d.previous_total_journal_count is null;
 
 create table if not exists worker_outsource_prices (
   worker_id text primary key references workers(id) on delete cascade,

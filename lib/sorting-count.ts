@@ -66,7 +66,7 @@ export function calculateSortingCountState(state: SortingCountState, previousTot
     const manual = parseCountInput(next.inputs.manualCount);
     const smart = parseCountInput(next.inputs.smartImportCount);
     if (total !== null && manual !== null && smart !== null && total - previous < 0) {
-      next.warning = "入力値を確認してください。計算結果がマイナスになります";
+      next.warning = "同じ対象年度内で今回総仕訳数が前回総仕訳数を下回っています。対象年度または総仕訳数を確認してください。";
     } else if (total !== null && manual !== null && smart !== null && total - previous !== manual + smart) {
       next.warning = "今回作業件数と、手入力件数＋スマート取込件数が一致していません";
     }

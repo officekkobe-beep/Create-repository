@@ -144,14 +144,17 @@ export function downloadSortingReportsBackupCsv(data: AppData, month?: string) {
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
   const reports = month ? data.reports.filter((report) => report.workMonth === month) : data.reports;
   downloadCsv(`backup_sorting_reports_${month ?? "all"}_${timestampForFile()}.csv`, [
-    ["作業月", "作業日", "担当者", "顧問先", "手入力件数", "スマート取込件数", "総仕訳数", "登録元", "メモ"],
+    ["作業月", "作業日", "対象年度", "決算月", "担当者", "顧問先", "手入力件数", "スマート取込件数", "前回総仕訳数", "総仕訳数", "登録元", "メモ"],
     ...reports.map((report) => [
       report.workMonth,
       report.workDate,
+      report.fiscalYearLabel,
+      `${report.clientClosingMonth}月`,
       workers.get(report.workerId) ?? "未設定",
       clients.get(report.clientId) ?? "未設定",
       report.manualCount,
       report.smartImportCount,
+      report.previousTotalJournalCount,
       report.totalSortingCount,
       report.source === "worker_link" ? "外注者リンク入力" : "管理者入力",
       report.memo
@@ -193,10 +196,11 @@ export function downloadOutsourceDetailsBackupCsv(data: AppData, month: string) 
 export function downloadClientSummaryBackupCsv(data: AppData, month: string) {
   const rows = buildClientProfitability(data, month);
   downloadCsv(`backup_client_summary_${month}_${timestampForFile()}.csv`, [
-    ["対象月", "顧問先", "売上合計", "外注費合計", "粗利", "粗利率", "手入力外注費", "スマート取込外注費", "提出書類外注費", "その他事務業務外注費"],
+    ["対象月", "顧問先", "仕訳作業対象年度", "売上合計", "外注費合計", "粗利", "粗利率", "手入力外注費", "スマート取込外注費", "提出書類外注費", "その他事務業務外注費"],
     ...rows.map((row) => [
       month,
       row.clientName,
+      row.sortingDetail?.fiscalYearLabels ?? "",
       row.totalRevenue,
       row.totalOutsourceCost,
       row.grossProfit,
