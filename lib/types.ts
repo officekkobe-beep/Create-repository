@@ -310,15 +310,14 @@ export type ClientProfitabilityRow = {
   clientId: string;
   clientName: string;
   sortingRevenue: number;
-  submittedDocumentsRevenue: number;
-  officeWorkRevenue: number;
+  monthlyWorkRevenue: number;
   totalRevenue: number;
   manualOutsourceCost: number;
   smartOutsourceCost: number;
-  submittedDocumentsOutsourceCost: number;
-  officeWorkOutsourceCost: number;
+  monthlyWorkOutsourceCost: number;
   totalOutsourceCost: number;
   grossProfit: number;
   grossProfitRate: number;
+  workTypeBreakdown: MonthlyWorkSummaryRow[];
   sortingDetail?: ClientSummaryRow;
 };

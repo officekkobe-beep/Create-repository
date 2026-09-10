@@ -195,13 +195,11 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
     "顧問先",
     "仕訳作業対象年度",
     "仕訳日報売上",
-    "提出書類売上",
-    "その他事務業務売上",
+    "月次作業売上",
     "売上合計",
     "手入力外注費",
     "スマート取込外注費",
-    "提出書類外注費",
-    "その他事務業務外注費",
+    "月次作業外注費",
     "外注費合計",
     "粗利",
     "粗利率",
@@ -216,7 +214,9 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
     "スマート取込売上",
     "スマート取込原価"
   ];
+  const breakdownHeader = ["作業月", "顧問先", "作業種別", "数量", "単位", "売上", "外注費", "粗利"];
   const lines = [
+    "顧問先別採算集計",
     header.map(escapeCell).join(","),
     ...rows.map((row) => {
       return [
@@ -224,13 +224,11 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
         row.clientName,
         row.sortingDetail?.fiscalYearLabels ?? "",
         row.sortingRevenue,
-        row.submittedDocumentsRevenue,
-        row.officeWorkRevenue,
+        row.monthlyWorkRevenue,
         row.totalRevenue,
         row.manualOutsourceCost,
         row.smartOutsourceCost,
-        row.submittedDocumentsOutsourceCost,
-        row.officeWorkOutsourceCost,
+        row.monthlyWorkOutsourceCost,
         row.totalOutsourceCost,
         row.grossProfit,
         grossRate(row.totalRevenue, row.grossProfit),
@@ -247,7 +245,26 @@ export function downloadClientBillingCsv(month: string, rows: ClientProfitabilit
       ]
         .map(escapeCell)
         .join(",");
-    })
+    }),
+    "",
+    "作業種別別内訳（月次作業）",
+    breakdownHeader.map(escapeCell).join(","),
+    ...rows.flatMap((row) =>
+      row.workTypeBreakdown.map((item) =>
+        [
+          month,
+          row.clientName,
+          item.workTypeName,
+          item.unit === "count" ? item.documentCount : item.workMinutes,
+          item.unit === "count" ? "件" : "分",
+          item.revenue,
+          item.outsourceCost,
+          item.grossProfit
+        ]
+          .map(escapeCell)
+          .join(",")
+      )
+    )
   ];
   downloadCsv(`client_billing_${month}.csv`, lines);
 }

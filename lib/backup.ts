@@ -197,7 +197,7 @@ export function downloadOutsourceDetailsBackupCsv(data: AppData, month: string) 
 export function downloadClientSummaryBackupCsv(data: AppData, month: string) {
   const rows = buildClientProfitability(data, month);
   downloadCsv(`backup_client_summary_${month}_${timestampForFile()}.csv`, [
-    ["対象月", "顧問先", "仕訳作業対象年度", "売上合計", "外注費合計", "粗利", "粗利率", "手入力外注費", "スマート取込外注費", "提出書類外注費", "その他事務業務外注費"],
+    ["対象月", "顧問先", "仕訳作業対象年度", "売上合計", "外注費合計", "粗利", "粗利率", "手入力外注費", "スマート取込外注費", "月次作業外注費"],
     ...rows.map((row) => [
       month,
       row.clientName,
@@ -208,8 +208,7 @@ export function downloadClientSummaryBackupCsv(data: AppData, month: string) {
       formatPercent(row.grossProfitRate),
       row.manualOutsourceCost,
       row.smartOutsourceCost,
-      row.submittedDocumentsOutsourceCost,
-      row.officeWorkOutsourceCost
+      row.monthlyWorkOutsourceCost
     ])
   ]);
 }

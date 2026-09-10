@@ -518,30 +518,29 @@ export function buildClientProfitability(data: AppData, month: string): ClientPr
       const clientName = data.clients.find((client) => client.id === clientId)?.name ?? "未設定";
       const sorting = sortingSummary.clientRows.find((row) => row.clientId === clientId);
       const monthly = monthlySummary.clientBilling.find((row) => row.clientId === clientId);
-      const submitted = monthly?.rows.find((row) => row.workTypeId === "submitted-documents");
-      const office = monthly?.rows.find((row) => row.workTypeId === "office-work");
+      // 仕訳作業以外の月次作業は、提出書類・その他事務業務の2種類に固定せず、
+      // monthly.rows（work_type_id単位で集計済み）をそのまま作業種別別の内訳として使う。
       const outsource = outsourceSummary.clientOutsource.get(clientId) ?? { manual: 0, smart: 0, submitted: 0, office: 0 };
       const sortingRevenue = sorting?.sortingRevenue ?? 0;
-      const submittedDocumentsRevenue = submitted?.revenue ?? 0;
-      const officeWorkRevenue = office?.revenue ?? 0;
-      const monthlyRevenue = monthly?.totalRevenue ?? 0;
-      const totalRevenue = sortingRevenue + monthlyRevenue;
-      const totalOutsourceCost = outsource.manual + outsource.smart + outsource.submitted + outsource.office;
+      const monthlyWorkRevenue = monthly?.totalRevenue ?? 0;
+      const monthlyWorkOutsourceCost = monthly?.totalOutsourceCost ?? 0;
+      const totalRevenue = sortingRevenue + monthlyWorkRevenue;
+      const totalOutsourceCost = outsource.manual + outsource.smart + monthlyWorkOutsourceCost;
       const grossProfit = totalRevenue - totalOutsourceCost;
+      const workTypeBreakdown = (monthly?.rows ?? []).slice().sort((a, b) => a.workTypeName.localeCompare(b.workTypeName, "ja"));
       return {
         clientId,
         clientName,
         sortingRevenue,
-        submittedDocumentsRevenue,
-        officeWorkRevenue,
+        monthlyWorkRevenue,
         totalRevenue,
         manualOutsourceCost: outsource.manual,
         smartOutsourceCost: outsource.smart,
-        submittedDocumentsOutsourceCost: outsource.submitted,
-        officeWorkOutsourceCost: outsource.office,
+        monthlyWorkOutsourceCost,
         totalOutsourceCost,
         grossProfit,
         grossProfitRate: totalRevenue ? (grossProfit / totalRevenue) * 100 : 0,
+        workTypeBreakdown,
         sortingDetail: sorting
       };
     })
