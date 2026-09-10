@@ -355,9 +355,10 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
         workMinutes: sum.workMinutes + row.workMinutes,
         revenue: sum.revenue + row.revenue,
         cost: sum.cost + row.cost,
+        outsourceCost: sum.outsourceCost + row.outsourceCost,
         grossProfit: sum.grossProfit + row.grossProfit
       }),
-      { documentCount: 0, workMinutes: 0, revenue: 0, cost: 0, grossProfit: 0 }
+      { documentCount: 0, workMinutes: 0, revenue: 0, cost: 0, outsourceCost: 0, grossProfit: 0 }
     )
   };
 }
