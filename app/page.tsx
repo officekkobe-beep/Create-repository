@@ -15,7 +15,9 @@ import {
   formatPercent,
   getCurrentMonth,
   monthFromDate,
-  unitLabel
+  unitLabel,
+  unitPriceLabelFor,
+  unitQuantityFor
 } from "@/lib/calculations";
 import {
   downloadClientBillingCsv,
@@ -135,12 +137,12 @@ function errorMessage(error: unknown) {
 
 type ConfirmKind = "sorting" | "monthly" | null;
 
-function amountByUnit(quantity: number, price: Pick<UnitPrice, "amount" | "quantity">) {
-  return Math.round((quantity / price.quantity) * price.amount);
+function amountByUnit(quantity: number, unitQuantity: number, amount: number) {
+  return Math.round((quantity / unitQuantity) * amount);
 }
 
-function outsourceByUnit(quantity: number, price: Pick<UnitPrice, "outsourceAmount" | "quantity">) {
-  return Math.round((quantity / price.quantity) * price.outsourceAmount);
+function outsourceByUnit(quantity: number, unitQuantity: number, outsourceAmount: number) {
+  return Math.round((quantity / unitQuantity) * outsourceAmount);
 }
 
 function displayMemo(memo: string) {
@@ -526,10 +528,11 @@ export default function Home() {
     const worker = data.workers.find((item) => item.id === monthlyForm.workerId);
     const client = data.clients.find((item) => item.id === monthlyForm.clientId);
     const workType = data.workTypes.find((item) => item.id === monthlyForm.workTypeId);
-    const price = data.unitPrices.find((item) => item.workTypeId === monthlyForm.workTypeId) ?? { amount: 0, outsourceAmount: 0, quantity: workType?.unit === "time" ? 10 : 1, unitLabel: "" };
+    const price = data.unitPrices.find((item) => item.workTypeId === monthlyForm.workTypeId) ?? { amount: 0, outsourceAmount: 0 };
     const quantity = workType?.unit === "time" ? monthlyForm.workMinutes : monthlyForm.documentCount;
-    const revenue = amountByUnit(quantity, price);
-    const outsourceCost = outsourceByUnit(quantity, price);
+    const unitQuantity = workType ? unitQuantityFor(workType) : 1;
+    const revenue = amountByUnit(quantity, unitQuantity, price.amount);
+    const outsourceCost = outsourceByUnit(quantity, unitQuantity, price.outsourceAmount);
     return [
       ["作業日", monthlyForm.workDate],
       ["顧問先", client?.name ?? "未設定"],
@@ -539,8 +542,8 @@ export default function Home() {
       ["作業種別名", workType?.name ?? "未設定"],
       ["単位", workType ? unitLabel(workType) : "未設定"],
       [workType?.unit === "time" ? "作業時間" : "数量", workType?.unit === "time" ? `${formatNumber(monthlyForm.workMinutes)}分` : `${formatNumber(monthlyForm.documentCount)}件`],
-      ["売上単価", `${workType?.unit === "time" ? "10分あたり" : "1件あたり"}${formatNumber(price.amount)}円`],
-      ["外注単価", `${workType?.unit === "time" ? "10分あたり" : "1件あたり"}${formatNumber(price.outsourceAmount)}円`],
+      ["売上単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(price.amount)}円`],
+      ["外注単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(price.outsourceAmount)}円`],
       ["売上金額", formatCurrency(revenue)],
       ["外注費", formatCurrency(outsourceCost)],
       ["粗利", formatCurrency(revenue - outsourceCost)],

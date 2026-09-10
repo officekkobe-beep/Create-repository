@@ -59,16 +59,26 @@ export function calculateAutoWorkCount(reports: DailyReport[], report: DailyRepo
   return Math.max(report.totalSortingCount - previous.totalSortingCount, 0);
 }
 
-function amountByUnit(quantity: number, price: Pick<UnitPrice, "amount" | "quantity">) {
-  return Math.round((quantity / price.quantity) * price.amount);
+// unit_prices.quantity / unit_label はDBに保存された値だが、作業種別のunitが後から変更されても
+// 追随せず古い値が残ることがあるため、金額計算では信用せず、常にworkType.unitから導出する。
+export function unitQuantityFor(workType: Pick<WorkType, "unit">) {
+  return workType.unit === "count" ? 1 : 10;
 }
 
-function costByUnit(quantity: number, price: Pick<UnitPrice, "costAmount" | "quantity">) {
-  return Math.round((quantity / price.quantity) * price.costAmount);
+export function unitPriceLabelFor(workType: Pick<WorkType, "unit">) {
+  return workType.unit === "count" ? "1件あたり" : "10分あたり";
 }
 
-function outsourceByUnit(quantity: number, price: Pick<UnitPrice, "outsourceAmount" | "quantity">) {
-  return Math.round((quantity / price.quantity) * price.outsourceAmount);
+function amountByUnit(quantity: number, unitQuantity: number, amount: number) {
+  return Math.round((quantity / unitQuantity) * amount);
+}
+
+function costByUnit(quantity: number, unitQuantity: number, costAmount: number) {
+  return Math.round((quantity / unitQuantity) * costAmount);
+}
+
+function outsourceByUnit(quantity: number, unitQuantity: number, outsourceAmount: number) {
+  return Math.round((quantity / unitQuantity) * outsourceAmount);
 }
 
 function outsourceAmount(quantity: number, unitPrice: number, unitQuantity = 1) {
@@ -251,7 +261,7 @@ export function calculateMonthlyWorkAmount(report: Pick<MonthlyWorkReport, "work
   const workType = data.workTypes.find((item) => item.id === report.workTypeId);
   if (!price || !workType) return 0;
   const quantity = workType.unit === "count" ? report.documentCount : report.workMinutes;
-  return amountByUnit(quantity, price);
+  return amountByUnit(quantity, unitQuantityFor(workType), price.amount);
 }
 
 export function buildMonthlyWorkSummary(data: AppData, month: string) {
@@ -266,6 +276,7 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     const price = prices.get(report.workTypeId);
     if (!workType || !price) return;
 
+    const unitQuantity = unitQuantityFor(workType);
     const key = `${report.clientId}-${report.workTypeId}`;
     const row =
       rowMap.get(key) ??
@@ -281,8 +292,8 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
         revenueUnitPrice: price.amount,
         costUnitPrice: price.costAmount,
         outsourceUnitPrice: price.outsourceAmount,
-        unitQuantity: price.quantity,
-        unitLabel: price.unitLabel,
+        unitQuantity,
+        unitLabel: unitPriceLabelFor(workType),
         revenue: 0,
         cost: 0,
         grossProfit: 0,
@@ -292,9 +303,9 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     row.documentCount += report.documentCount;
     row.workMinutes += report.workMinutes;
     const quantity = workType.unit === "count" ? row.documentCount : row.workMinutes;
-    row.revenue = amountByUnit(quantity, price);
-    row.cost = costByUnit(quantity, price);
-    row.outsourceCost = outsourceByUnit(quantity, price);
+    row.revenue = amountByUnit(quantity, unitQuantity, price.amount);
+    row.cost = costByUnit(quantity, unitQuantity, price.costAmount);
+    row.outsourceCost = outsourceByUnit(quantity, unitQuantity, price.outsourceAmount);
     row.grossProfit = row.revenue - row.outsourceCost;
     rowMap.set(key, row);
   });
@@ -428,7 +439,7 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
       const price = unitPrices.get(report.workTypeId);
       if (!workType || !price) return;
       if (workType.unit === "count") {
-        const amount = outsourceByUnit(report.documentCount, price);
+        const amount = outsourceByUnit(report.documentCount, unitQuantityFor(workType), price.outsourceAmount);
         row.submittedDocumentsCount += report.documentCount;
         row.submittedDocumentsAmount += amount;
         addClientOutsource(report.clientId, "submitted", amount);
@@ -446,7 +457,7 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
           memo: report.memo
         });
       } else {
-        const amount = outsourceByUnit(report.workMinutes, price);
+        const amount = outsourceByUnit(report.workMinutes, unitQuantityFor(workType), price.outsourceAmount);
         row.officeWorkMinutes += report.workMinutes;
         row.officeWorkAmount += amount;
         addClientOutsource(report.clientId, "office", amount);
