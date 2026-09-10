@@ -138,6 +138,23 @@ create table if not exists worker_outsource_prices (
   updated_at timestamptz not null default now()
 );
 
+-- 仕訳作業以外の月次作業（提出書類・その他事務業務・給与計算など）について、
+-- 担当者×作業種別ごとの個別外注単価を設定するテーブル。未設定の場合はwork_typesマスタの外注単価を使う。
+create table if not exists worker_work_type_outsource_prices (
+  id text primary key,
+  worker_id text not null references workers(id) on delete cascade,
+  work_type_id text not null references work_types(id) on delete cascade,
+  outsource_unit_price integer not null default 0 check (outsource_unit_price >= 0),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists worker_work_type_outsource_prices_unique_idx
+  on worker_work_type_outsource_prices(worker_id, work_type_id);
+create index if not exists worker_work_type_outsource_prices_worker_idx
+  on worker_work_type_outsource_prices(worker_id);
+
 create table if not exists monthly_work_reports (
   id text primary key,
   work_date date not null,
@@ -327,6 +344,7 @@ alter table work_types enable row level security;
 alter table unit_prices enable row level security;
 alter table sorting_unit_prices enable row level security;
 alter table worker_outsource_prices enable row level security;
+alter table worker_work_type_outsource_prices enable row level security;
 alter table worker_share_links enable row level security;
 alter table monthly_work_reports enable row level security;
 alter table payment_statement_settings enable row level security;
@@ -396,6 +414,15 @@ create policy "worker_outsource_prices_select" on worker_outsource_prices for se
 create policy "worker_outsource_prices_insert" on worker_outsource_prices for insert with check (true);
 create policy "worker_outsource_prices_update" on worker_outsource_prices for update using (true) with check (true);
 create policy "worker_outsource_prices_delete" on worker_outsource_prices for delete using (true);
+
+drop policy if exists "worker_work_type_outsource_prices_select" on worker_work_type_outsource_prices;
+drop policy if exists "worker_work_type_outsource_prices_insert" on worker_work_type_outsource_prices;
+drop policy if exists "worker_work_type_outsource_prices_update" on worker_work_type_outsource_prices;
+drop policy if exists "worker_work_type_outsource_prices_delete" on worker_work_type_outsource_prices;
+create policy "worker_work_type_outsource_prices_select" on worker_work_type_outsource_prices for select using (true);
+create policy "worker_work_type_outsource_prices_insert" on worker_work_type_outsource_prices for insert with check (true);
+create policy "worker_work_type_outsource_prices_update" on worker_work_type_outsource_prices for update using (true) with check (true);
+create policy "worker_work_type_outsource_prices_delete" on worker_work_type_outsource_prices for delete using (true);
 
 drop policy if exists "worker_share_links_select" on worker_share_links;
 drop policy if exists "worker_share_links_insert" on worker_share_links;

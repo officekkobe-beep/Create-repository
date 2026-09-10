@@ -72,6 +72,7 @@ export function createBackupPayload(data: AppData, kind: BackupKind) {
     unit_prices: data.unitPrices,
     sorting_unit_prices: data.sortingUnitPrices,
     worker_outsource_prices: data.workerOutsourcePrices,
+    worker_work_type_outsource_prices: data.workerWorkTypeOutsourcePrices,
     worker_share_links: data.workerShareLinks,
     payment_statement_settings: data.paymentStatementSettings
   };

@@ -127,6 +127,7 @@ export const sampleData: AppData = {
     { id: "worker-b", code: "W002", name: "鈴木 一郎", active: true, createdAt: today },
     { id: "worker-c", code: "W003", name: "田中 美咲", active: true, createdAt: today }
   ]),
+  workerWorkTypeOutsourcePrices: [],
   workerShareLinks: [],
   paymentStatementSettings: defaultPaymentStatementSettings,
   monthlyWorkReports: [

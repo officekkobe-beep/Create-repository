@@ -15,6 +15,7 @@ import {
   formatPercent,
   getCurrentMonth,
   monthFromDate,
+  resolveMonthlyOutsourceUnitPrice,
   unitLabel,
   unitPriceLabelFor,
   unitQuantityFor
@@ -67,7 +68,9 @@ import {
   upsertClient,
   upsertMonthlyWorkReport,
   upsertReport,
-  upsertWorker
+  upsertWorker,
+  upsertWorkerWorkTypeOutsourcePrice,
+  deleteWorkerWorkTypeOutsourcePrice
 } from "@/lib/storage";
 import {
   calculateSortingCountState,
@@ -97,6 +100,7 @@ import type {
   Worker,
   WorkerOutsourcePrice,
   WorkerOutsourceSummaryRow,
+  WorkerWorkTypeOutsourcePrice,
   WorkType
 } from "@/lib/types";
 
@@ -207,6 +211,7 @@ const emptyData: AppData = {
   unitPrices: [],
   sortingUnitPrices: [],
   workerOutsourcePrices: [],
+  workerWorkTypeOutsourcePrices: [],
   workerShareLinks: [],
   paymentStatementSettings: emptySettings,
   monthlyWorkReports: [],
@@ -531,8 +536,9 @@ export default function Home() {
     const price = data.unitPrices.find((item) => item.workTypeId === monthlyForm.workTypeId) ?? { amount: 0, outsourceAmount: 0 };
     const quantity = workType?.unit === "time" ? monthlyForm.workMinutes : monthlyForm.documentCount;
     const unitQuantity = workType ? unitQuantityFor(workType) : 1;
+    const resolvedOutsource = resolveMonthlyOutsourceUnitPrice(data, monthlyForm.workerId, monthlyForm.workTypeId, price.outsourceAmount);
     const revenue = amountByUnit(quantity, unitQuantity, price.amount);
-    const outsourceCost = outsourceByUnit(quantity, unitQuantity, price.outsourceAmount);
+    const outsourceCost = outsourceByUnit(quantity, unitQuantity, resolvedOutsource.unitPrice);
     return [
       ["作業日", monthlyForm.workDate],
       ["顧問先", client?.name ?? "未設定"],
@@ -543,7 +549,8 @@ export default function Home() {
       ["単位", workType ? unitLabel(workType) : "未設定"],
       [workType?.unit === "time" ? "作業時間" : "数量", workType?.unit === "time" ? `${formatNumber(monthlyForm.workMinutes)}分` : `${formatNumber(monthlyForm.documentCount)}件`],
       ["売上単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(price.amount)}円`],
-      ["外注単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(price.outsourceAmount)}円`],
+      ["外注単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(resolvedOutsource.unitPrice)}円`],
+      ["単価種別", resolvedOutsource.source === "worker" ? "担当者別単価" : "作業種別デフォルト単価"],
       ["売上金額", formatCurrency(revenue)],
       ["外注費", formatCurrency(outsourceCost)],
       ["粗利", formatCurrency(revenue - outsourceCost)],
@@ -808,6 +815,22 @@ export default function Home() {
     setData(next);
     setOutsourcePriceForms(Object.fromEntries(next.workerOutsourcePrices.map((item) => [item.workerId, item])));
     notify("外注単価を保存しました。");
+  }
+
+  async function submitWorkerWorkTypeOutsourcePrice(input: Partial<WorkerWorkTypeOutsourcePrice> & Pick<WorkerWorkTypeOutsourcePrice, "workerId" | "workTypeId" | "outsourceUnitPrice">) {
+    try {
+      const next = await upsertWorkerWorkTypeOutsourcePrice(input, data);
+      setData(next);
+      notify("担当者別の外注単価を保存しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function removeWorkerWorkTypeOutsourcePrice(id: string) {
+    const next = await deleteWorkerWorkTypeOutsourcePrice(id, data);
+    setData(next);
+    notify("担当者別の外注単価を削除しました。");
   }
 
   async function submitWorkType(workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>) {
@@ -1087,6 +1110,8 @@ export default function Home() {
                 submitPrice={submitPrice}
                 submitSortingPrice={submitSortingPrice}
                 submitOutsourcePrice={submitOutsourcePrice}
+                submitWorkerWorkTypeOutsourcePrice={submitWorkerWorkTypeOutsourcePrice}
+                removeWorkerWorkTypeOutsourcePrice={removeWorkerWorkTypeOutsourcePrice}
                 submitWorkType={submitWorkType}
                 deactivateWorkType={deactivateWorkType}
                 deleteWorkType={removeWorkTypePermanently}
@@ -1378,7 +1403,7 @@ function SortingDetail({ row }: { row: ReturnType<typeof buildMonthlySummary>["c
 function OutsourcePaymentTable({ rows, selectedWorkerId, setSelectedWorkerId, onPrint }: { rows: WorkerOutsourceSummaryRow[]; selectedWorkerId: string; setSelectedWorkerId: (id: string) => void; onPrint: (row: WorkerOutsourceSummaryRow) => void }) {
   if (!rows.length) return <Empty text="外注費支払データがありません。" />;
   const selected = rows.find((row) => row.workerId === selectedWorkerId) ?? rows[0];
-  return <div className="space-y-4"><section className="panel overflow-hidden"><PanelTitle title="担当者別支払一覧" description="担当者行をクリックすると明細を表示します。" /><div className="overflow-x-auto"><table className="w-full min-w-[1120px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">担当者</th><th className="px-4 py-3 text-right">手入力件数</th><th className="px-4 py-3 text-right">手入力外注費</th><th className="px-4 py-3 text-right">スマート取込件数</th><th className="px-4 py-3 text-right">スマート取込外注費</th><th className="px-4 py-3 text-right">件数作業数量</th><th className="px-4 py-3 text-right">件数作業外注費</th><th className="px-4 py-3 text-right">時間作業時間</th><th className="px-4 py-3 text-right">時間作業外注費</th><th className="px-4 py-3 text-right">支払合計</th></tr></thead><tbody>{rows.map((row) => <tr key={row.workerId} className={`cursor-pointer hover:bg-slate-50 ${selected.workerId === row.workerId ? "bg-blue-50" : ""}`} onClick={() => setSelectedWorkerId(row.workerId)}><td className="table-cell font-semibold">{row.workerName}</td><td className="table-cell text-right">{formatNumber(row.manualCount)}</td><td className="table-cell text-right">{formatCurrency(row.manualAmount)}</td><td className="table-cell text-right">{formatNumber(row.smartImportCount)}</td><td className="table-cell text-right">{formatCurrency(row.smartImportAmount)}</td><td className="table-cell text-right">{formatNumber(row.submittedDocumentsCount)}</td><td className="table-cell text-right">{formatCurrency(row.submittedDocumentsAmount)}</td><td className="table-cell text-right">{formatMinutes(row.officeWorkMinutes)}</td><td className="table-cell text-right">{formatCurrency(row.officeWorkAmount)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.totalAmount)}</td></tr>)}</tbody></table></div></section><section className="panel overflow-hidden"><PanelTitle title={`${selected.workerName}さんの明細`} description="PDF出力はブラウザの印刷画面でPDFとして保存できます。" /><div className="border-b border-line px-5 py-4"><button className="button-primary" onClick={() => onPrint(selected)}>支払明細PDF出力</button></div><div className="overflow-x-auto"><table className="w-full min-w-[920px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">作業区分</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3 text-right">単価</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3">メモ</th></tr></thead><tbody>{selected.details.map((detail) => <tr key={detail.id}><td className="table-cell font-semibold">{detail.workDate}</td><td className="table-cell">{detail.clientName}</td><td className="table-cell">{detail.workKind}</td><td className="table-cell text-right">{detail.quantityLabel}</td><td className="table-cell text-right">{formatCurrency(detail.unitPrice)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(detail.amount)}</td><td className="table-cell">{detail.memo}</td></tr>)}</tbody></table></div></section></div>;
+  return <div className="space-y-4"><section className="panel overflow-hidden"><PanelTitle title="担当者別支払一覧" description="担当者行をクリックすると明細を表示します。" /><div className="overflow-x-auto"><table className="w-full min-w-[1120px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">担当者</th><th className="px-4 py-3 text-right">手入力件数</th><th className="px-4 py-3 text-right">手入力外注費</th><th className="px-4 py-3 text-right">スマート取込件数</th><th className="px-4 py-3 text-right">スマート取込外注費</th><th className="px-4 py-3 text-right">件数作業数量</th><th className="px-4 py-3 text-right">件数作業外注費</th><th className="px-4 py-3 text-right">時間作業時間</th><th className="px-4 py-3 text-right">時間作業外注費</th><th className="px-4 py-3 text-right">支払合計</th></tr></thead><tbody>{rows.map((row) => <tr key={row.workerId} className={`cursor-pointer hover:bg-slate-50 ${selected.workerId === row.workerId ? "bg-blue-50" : ""}`} onClick={() => setSelectedWorkerId(row.workerId)}><td className="table-cell font-semibold">{row.workerName}</td><td className="table-cell text-right">{formatNumber(row.manualCount)}</td><td className="table-cell text-right">{formatCurrency(row.manualAmount)}</td><td className="table-cell text-right">{formatNumber(row.smartImportCount)}</td><td className="table-cell text-right">{formatCurrency(row.smartImportAmount)}</td><td className="table-cell text-right">{formatNumber(row.submittedDocumentsCount)}</td><td className="table-cell text-right">{formatCurrency(row.submittedDocumentsAmount)}</td><td className="table-cell text-right">{formatMinutes(row.officeWorkMinutes)}</td><td className="table-cell text-right">{formatCurrency(row.officeWorkAmount)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.totalAmount)}</td></tr>)}</tbody></table></div></section><section className="panel overflow-hidden"><PanelTitle title={`${selected.workerName}さんの明細`} description="PDF出力はブラウザの印刷画面でPDFとして保存できます。" /><div className="border-b border-line px-5 py-4"><button className="button-primary" onClick={() => onPrint(selected)}>支払明細PDF出力</button></div><div className="overflow-x-auto"><table className="w-full min-w-[1020px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業日</th><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">作業区分</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3 text-right">単価</th><th className="px-4 py-3">単価種別</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3">メモ</th></tr></thead><tbody>{selected.details.map((detail) => <tr key={detail.id}><td className="table-cell font-semibold">{detail.workDate}</td><td className="table-cell">{detail.clientName}</td><td className="table-cell">{detail.workKind}</td><td className="table-cell text-right">{detail.quantityLabel}</td><td className="table-cell text-right">{formatCurrency(detail.unitPrice)}</td><td className="table-cell">{detail.priceSource ? (detail.priceSource === "worker" ? "担当者別単価" : "作業種別デフォルト単価") : "-"}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(detail.amount)}</td><td className="table-cell">{detail.memo}</td></tr>)}</tbody></table></div></section></div>;
 }
 
 function SettingsPanel(props: {
@@ -1407,6 +1432,8 @@ function SettingsPanel(props: {
   submitPrice: (event: FormEvent, price: UnitPrice) => void;
   submitSortingPrice: (event: FormEvent, price: SortingUnitPrice) => void;
   submitOutsourcePrice: (event: FormEvent, price: WorkerOutsourcePrice) => void;
+  submitWorkerWorkTypeOutsourcePrice: (input: Partial<WorkerWorkTypeOutsourcePrice> & Pick<WorkerWorkTypeOutsourcePrice, "workerId" | "workTypeId" | "outsourceUnitPrice">) => void;
+  removeWorkerWorkTypeOutsourcePrice: (id: string) => void;
   submitWorkType: (workType: Partial<WorkType> & Pick<WorkType, "name" | "unit">, price: Partial<UnitPrice>) => void;
   deactivateWorkType: (id: string) => void;
   deleteWorkType: (id: string) => void;
@@ -1434,7 +1461,7 @@ function SettingsPanel(props: {
       {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} deactivate={props.deactivateClient} deleteItem={props.deleteClient} /> : null}
       {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} deactivate={props.deactivateWorker} deleteItem={props.deleteWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}
       {props.settingsTab === "workTypes" ? <WorkTypeSettings data={props.data} submit={props.submitWorkType} deactivate={props.deactivateWorkType} deleteItem={props.deleteWorkType} /> : null}
-      {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} /> : null}
+      {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} submitWorkerWorkTypeOutsourcePrice={props.submitWorkerWorkTypeOutsourcePrice} removeWorkerWorkTypeOutsourcePrice={props.removeWorkerWorkTypeOutsourcePrice} /> : null}
       {props.settingsTab === "paymentStatement" ? <PaymentStatementSettingsPanel form={props.paymentSettingsForm} setForm={props.setPaymentSettingsForm} submit={props.submitPaymentSettings} /> : null}
     </section>
   );
@@ -1709,8 +1736,121 @@ function PaymentStatementSettingsPanel({ form, setForm, submit }: { form: Paymen
   return <section className="panel p-5"><h2 className="text-xl font-bold">支払明細書設定</h2><form className="mt-5 grid gap-4 lg:grid-cols-2" onSubmit={submit}><TextField label="PDFタイトル" value={form.title} onChange={(value) => setForm({ ...form, title: value })} /><TextField label="発行者名" value={form.issuerName} onChange={(value) => setForm({ ...form, issuerName: value })} /><TextField label="発行者住所" value={form.issuerAddress} onChange={(value) => setForm({ ...form, issuerAddress: value })} /><TextField label="発行者電話番号" value={form.issuerPhone} onChange={(value) => setForm({ ...form, issuerPhone: value })} /><TextField label="発行者メールアドレス" value={form.issuerEmail} onChange={(value) => setForm({ ...form, issuerEmail: value })} /><TextField label="登録番号または任意番号" value={form.registrationNumber} onChange={(value) => setForm({ ...form, registrationNumber: value })} /><TextField label="支払予定日文言" value={form.paymentDueText} onChange={(value) => setForm({ ...form, paymentDueText: value })} /><TextField label="振込手数料に関する文言" value={form.bankFeeText} onChange={(value) => setForm({ ...form, bankFeeText: value })} /><Field label="備考" className="lg:col-span-2"><textarea className="field min-h-24" value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></Field><Field label="フッター文言" className="lg:col-span-2"><textarea className="field min-h-20" value={form.footerText} onChange={(event) => setForm({ ...form, footerText: event.target.value })} /></Field><SubmitRow label="支払明細書設定を保存" /></form></section>;
 }
 
-function PriceSettings({ data, sortingPriceForms, outsourcePriceForms, setSortingPriceForms, setOutsourcePriceForms, submitSortingPrice, submitOutsourcePrice }: { data: AppData; priceForms: Record<string, UnitPrice>; sortingPriceForms: Record<string, SortingUnitPrice>; outsourcePriceForms: Record<string, WorkerOutsourcePrice>; setPriceForms: (forms: Record<string, UnitPrice>) => void; setSortingPriceForms: (forms: Record<string, SortingUnitPrice>) => void; setOutsourcePriceForms: (forms: Record<string, WorkerOutsourcePrice>) => void; submitPrice: (event: FormEvent, price: UnitPrice) => void; submitSortingPrice: (event: FormEvent, price: SortingUnitPrice) => void; submitOutsourcePrice: (event: FormEvent, price: WorkerOutsourcePrice) => void }) {
-  return <section className="panel overflow-hidden"><PanelTitle title="単価設定" description="ここでは仕訳作業の単価を編集します。提出書類などの作業種別単価は、作業種別設定で編集してください。" /><div className="space-y-6 p-5"><div><h3 className="font-bold">仕訳作業の売上・外注単価</h3><div className="mt-3 grid gap-4 lg:grid-cols-2">{data.sortingUnitPrices.map((price) => { const form = sortingPriceForms[price.id]; if (!form) return null; return <form key={price.id} className="rounded-lg border border-line p-4" onSubmit={(event) => submitSortingPrice(event, form)}><h4 className="font-bold">{form.name}</h4><div className="mt-4 grid gap-3 sm:grid-cols-2"><NumberField label="売上単価（円/件）" value={form.amount} onChange={(value) => setSortingPriceForms({ ...sortingPriceForms, [form.id]: { ...form, amount: value } })} /><NumberField label="外注単価（円/件）" value={form.costAmount} onChange={(value) => setSortingPriceForms({ ...sortingPriceForms, [form.id]: { ...form, costAmount: value } })} /></div><button className="button-primary mt-4" type="submit">保存</button></form>; })}</div></div><div><h3 className="font-bold">担当者別の仕訳外注単価</h3><p className="mt-1 text-sm text-slate-500">担当者別に手入力・スマート取込の外注単価を調整できます。作業種別ごとの外注単価は作業種別設定で管理します。</p><div className="mt-3 grid gap-4 lg:grid-cols-2">{data.workers.map((worker) => { const form = outsourcePriceForms[worker.id]; if (!form) return null; return <form key={worker.id} className="rounded-lg border border-line p-4" onSubmit={(event) => submitOutsourcePrice(event, form)}><h4 className="font-bold">{worker.code} {worker.name}</h4><div className="mt-4 grid gap-3 sm:grid-cols-2"><NumberField label="手入力 外注単価（円/件）" value={form.manualUnitPrice} onChange={(value) => setOutsourcePriceForms({ ...outsourcePriceForms, [worker.id]: { ...form, manualUnitPrice: value } })} /><NumberField label="スマート取込 外注単価（円/件）" value={form.smartUnitPrice} onChange={(value) => setOutsourcePriceForms({ ...outsourcePriceForms, [worker.id]: { ...form, smartUnitPrice: value } })} /></div><button className="button-primary mt-4" type="submit">保存</button></form>; })}</div></div></div></section>;
+function PriceSettings({
+  data,
+  sortingPriceForms,
+  outsourcePriceForms,
+  setSortingPriceForms,
+  setOutsourcePriceForms,
+  submitSortingPrice,
+  submitOutsourcePrice,
+  submitWorkerWorkTypeOutsourcePrice,
+  removeWorkerWorkTypeOutsourcePrice
+}: {
+  data: AppData;
+  priceForms: Record<string, UnitPrice>;
+  sortingPriceForms: Record<string, SortingUnitPrice>;
+  outsourcePriceForms: Record<string, WorkerOutsourcePrice>;
+  setPriceForms: (forms: Record<string, UnitPrice>) => void;
+  setSortingPriceForms: (forms: Record<string, SortingUnitPrice>) => void;
+  setOutsourcePriceForms: (forms: Record<string, WorkerOutsourcePrice>) => void;
+  submitPrice: (event: FormEvent, price: UnitPrice) => void;
+  submitSortingPrice: (event: FormEvent, price: SortingUnitPrice) => void;
+  submitOutsourcePrice: (event: FormEvent, price: WorkerOutsourcePrice) => void;
+  submitWorkerWorkTypeOutsourcePrice: (input: Partial<WorkerWorkTypeOutsourcePrice> & Pick<WorkerWorkTypeOutsourcePrice, "workerId" | "workTypeId" | "outsourceUnitPrice">) => void;
+  removeWorkerWorkTypeOutsourcePrice: (id: string) => void;
+}) {
+  return <section className="panel overflow-hidden"><PanelTitle title="単価設定" description="ここでは仕訳作業の単価を編集します。提出書類などの作業種別単価は、作業種別設定で編集してください。" /><div className="space-y-6 p-5"><div><h3 className="font-bold">仕訳作業の売上・外注単価</h3><div className="mt-3 grid gap-4 lg:grid-cols-2">{data.sortingUnitPrices.map((price) => { const form = sortingPriceForms[price.id]; if (!form) return null; return <form key={price.id} className="rounded-lg border border-line p-4" onSubmit={(event) => submitSortingPrice(event, form)}><h4 className="font-bold">{form.name}</h4><div className="mt-4 grid gap-3 sm:grid-cols-2"><NumberField label="売上単価（円/件）" value={form.amount} onChange={(value) => setSortingPriceForms({ ...sortingPriceForms, [form.id]: { ...form, amount: value } })} /><NumberField label="外注単価（円/件）" value={form.costAmount} onChange={(value) => setSortingPriceForms({ ...sortingPriceForms, [form.id]: { ...form, costAmount: value } })} /></div><button className="button-primary mt-4" type="submit">保存</button></form>; })}</div></div><div><h3 className="font-bold">担当者別の仕訳外注単価</h3><p className="mt-1 text-sm text-slate-500">担当者別に手入力・スマート取込の外注単価を調整できます。作業種別ごとの外注単価は作業種別設定で管理します。</p><div className="mt-3 grid gap-4 lg:grid-cols-2">{data.workers.map((worker) => { const form = outsourcePriceForms[worker.id]; if (!form) return null; return <form key={worker.id} className="rounded-lg border border-line p-4" onSubmit={(event) => submitOutsourcePrice(event, form)}><h4 className="font-bold">{worker.code} {worker.name}</h4><div className="mt-4 grid gap-3 sm:grid-cols-2"><NumberField label="手入力 外注単価（円/件）" value={form.manualUnitPrice} onChange={(value) => setOutsourcePriceForms({ ...outsourcePriceForms, [worker.id]: { ...form, manualUnitPrice: value } })} /><NumberField label="スマート取込 外注単価（円/件）" value={form.smartUnitPrice} onChange={(value) => setOutsourcePriceForms({ ...outsourcePriceForms, [worker.id]: { ...form, smartUnitPrice: value } })} /></div><button className="button-primary mt-4" type="submit">保存</button></form>; })}</div></div><WorkerWorkTypeOutsourcePriceSettings data={data} submit={submitWorkerWorkTypeOutsourcePrice} remove={removeWorkerWorkTypeOutsourcePrice} /></div></section>;
+}
+
+function WorkerWorkTypeOutsourcePriceSettings({
+  data,
+  submit,
+  remove
+}: {
+  data: AppData;
+  submit: (input: Partial<WorkerWorkTypeOutsourcePrice> & Pick<WorkerWorkTypeOutsourcePrice, "workerId" | "workTypeId" | "outsourceUnitPrice">) => void;
+  remove: (id: string) => void;
+}) {
+  const [form, setForm] = useState<{ id?: string; workerId: string; workTypeId: string; outsourceUnitPrice: number; active: boolean }>({
+    workerId: "",
+    workTypeId: "",
+    outsourceUnitPrice: 0,
+    active: true
+  });
+  const editing = Boolean(form.id);
+  const selectedWorkType = data.workTypes.find((item) => item.id === form.workTypeId);
+  const unitLabelText = selectedWorkType ? unitPriceLabelFor(selectedWorkType) : "";
+  const workerNames = new Map(data.workers.map((worker) => [worker.id, `${worker.code} ${worker.name}`]));
+  const workTypeNames = new Map(data.workTypes.map((workType) => [workType.id, workType.name]));
+
+  function reset() {
+    setForm({ workerId: "", workTypeId: "", outsourceUnitPrice: 0, active: true });
+  }
+
+  function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!form.workerId || !form.workTypeId) return;
+    submit({ id: form.id, workerId: form.workerId, workTypeId: form.workTypeId, outsourceUnitPrice: form.outsourceUnitPrice, active: form.active });
+    reset();
+  }
+
+  function edit(item: WorkerWorkTypeOutsourcePrice) {
+    setForm({ id: item.id, workerId: item.workerId, workTypeId: item.workTypeId, outsourceUnitPrice: item.outsourceUnitPrice, active: item.active });
+  }
+
+  return (
+    <div className="border-t border-line pt-6">
+      <h3 className="font-bold">担当者別・作業種別別の外注単価（月次作業）</h3>
+      <p className="mt-1 text-sm text-slate-500">提出書類・その他事務業務・給与計算など、仕訳作業以外の作業種別について、担当者ごとに外注単価を個別設定できます。未設定の場合は作業種別設定のデフォルト外注単価が使われます。</p>
+      <form className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_160px_100px_auto]" onSubmit={onSubmit}>
+        <select className="field" required value={form.workerId} onChange={(event) => setForm({ ...form, workerId: event.target.value })}>
+          <option value="">担当者を選択</option>
+          {data.workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.code} {worker.name}</option>)}
+        </select>
+        <select className="field" required value={form.workTypeId} onChange={(event) => setForm({ ...form, workTypeId: event.target.value })}>
+          <option value="">作業種別を選択</option>
+          {data.workTypes.map((workType) => <option key={workType.id} value={workType.id}>{workType.name}</option>)}
+        </select>
+        <input className="field" type="number" min={0} required placeholder={`外注単価${unitLabelText ? `（${unitLabelText}）` : ""}`} value={form.outsourceUnitPrice} onChange={(event) => setForm({ ...form, outsourceUnitPrice: Number(event.target.value) })} />
+        <label className="flex items-center gap-2 text-sm font-semibold text-slate-600">
+          <input type="checkbox" checked={form.active} onChange={(event) => setForm({ ...form, active: event.target.checked })} />
+          有効
+        </label>
+        <div className="flex gap-2">
+          <button className="button-primary" type="submit">{editing ? "更新" : "追加"}</button>
+          {editing ? <button className="button-secondary" type="button" onClick={reset}>キャンセル</button> : null}
+        </div>
+      </form>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full min-w-[720px] border-collapse">
+          <thead className="table-head"><tr><th className="px-4 py-3">担当者</th><th className="px-4 py-3">作業種別</th><th className="px-4 py-3 text-right">外注単価</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+          <tbody>
+            {data.workerWorkTypeOutsourcePrices.length === 0 ? (
+              <tr><td className="table-cell text-slate-500" colSpan={5}>担当者別の外注単価はまだ設定されていません。</td></tr>
+            ) : data.workerWorkTypeOutsourcePrices.map((item) => {
+              const workType = data.workTypes.find((wt) => wt.id === item.workTypeId);
+              const label = workType ? unitPriceLabelFor(workType) : "";
+              return (
+                <tr key={item.id} className={form.id === item.id ? "bg-blue-50" : ""}>
+                  <td className="table-cell font-semibold">{workerNames.get(item.workerId) ?? "未設定"}</td>
+                  <td className="table-cell">{workTypeNames.get(item.workTypeId) ?? "未設定"}</td>
+                  <td className="table-cell text-right">{label}{formatNumber(item.outsourceUnitPrice)}円</td>
+                  <td className="table-cell">{item.active ? "有効" : "無効"}</td>
+                  <td className="table-cell text-right">
+                    <div className="flex justify-end gap-2">
+                      <button className="button-secondary" type="button" onClick={() => edit(item)}>編集</button>
+                      <button className="button-danger" type="button" onClick={() => remove(item.id)}>削除</button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 

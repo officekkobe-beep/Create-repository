@@ -28,6 +28,7 @@ const emptyData: AppData = {
   unitPrices: [],
   sortingUnitPrices: [],
   workerOutsourcePrices: [],
+  workerWorkTypeOutsourcePrices: [],
   workerShareLinks: [],
   paymentStatementSettings: {
     title: "",

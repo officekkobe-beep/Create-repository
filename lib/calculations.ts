@@ -6,6 +6,7 @@ import type {
   DailyReport,
   MonthlyWorkReport,
   MonthlyWorkSummaryRow,
+  OutsourcePriceSource,
   OutsourceDetailRow,
   SummaryRow,
   UnitPrice,
@@ -83,6 +84,21 @@ function outsourceByUnit(quantity: number, unitQuantity: number, outsourceAmount
 
 function outsourceAmount(quantity: number, unitPrice: number, unitQuantity = 1) {
   return Math.round((quantity / unitQuantity) * unitPrice);
+}
+
+// 月次作業（仕訳作業以外）の外注単価は、担当者×作業種別の個別単価があればそれを優先し、
+// なければ作業種別マスタのデフォルト外注単価を使う。work_type_idとworker_idの組み合わせでのみ判定する。
+export function resolveMonthlyOutsourceUnitPrice(
+  data: AppData,
+  workerId: string,
+  workTypeId: string,
+  defaultUnitPrice: number
+): { unitPrice: number; source: OutsourcePriceSource } {
+  const override = data.workerWorkTypeOutsourcePrices.find(
+    (item) => item.workerId === workerId && item.workTypeId === workTypeId && item.active
+  );
+  if (override) return { unitPrice: override.outsourceUnitPrice, source: "worker" };
+  return { unitPrice: defaultUnitPrice, source: "default" };
 }
 
 function workerOutsourcePrice(data: AppData, workerId: string): WorkerOutsourcePrice {
@@ -305,7 +321,11 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     const quantity = workType.unit === "count" ? row.documentCount : row.workMinutes;
     row.revenue = amountByUnit(quantity, unitQuantity, price.amount);
     row.cost = costByUnit(quantity, unitQuantity, price.costAmount);
-    row.outsourceCost = outsourceByUnit(quantity, unitQuantity, price.outsourceAmount);
+    // 外注費は担当者ごとに単価が異なりうるため、集計後の合計数量からまとめて計算せず、
+    // 明細（レポート）単位で適用単価を解決してから積み上げる。
+    const reportQuantity = workType.unit === "count" ? report.documentCount : report.workMinutes;
+    const resolved = resolveMonthlyOutsourceUnitPrice(data, report.workerId, report.workTypeId, price.outsourceAmount);
+    row.outsourceCost += outsourceByUnit(reportQuantity, unitQuantity, resolved.unitPrice);
     row.grossProfit = row.revenue - row.outsourceCost;
     rowMap.set(key, row);
   });
@@ -438,8 +458,9 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
       const workType = workTypes.get(report.workTypeId);
       const price = unitPrices.get(report.workTypeId);
       if (!workType || !price) return;
+      const resolved = resolveMonthlyOutsourceUnitPrice(data, report.workerId, report.workTypeId, price.outsourceAmount);
       if (workType.unit === "count") {
-        const amount = outsourceByUnit(report.documentCount, unitQuantityFor(workType), price.outsourceAmount);
+        const amount = outsourceByUnit(report.documentCount, unitQuantityFor(workType), resolved.unitPrice);
         row.submittedDocumentsCount += report.documentCount;
         row.submittedDocumentsAmount += amount;
         addClientOutsource(report.clientId, "submitted", amount);
@@ -452,12 +473,13 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
           workKind: workType.name,
           quantity: report.documentCount,
           quantityLabel: `${formatNumber(report.documentCount)}件`,
-          unitPrice: price.outsourceAmount,
+          unitPrice: resolved.unitPrice,
+          priceSource: resolved.source,
           amount,
           memo: report.memo
         });
       } else {
-        const amount = outsourceByUnit(report.workMinutes, unitQuantityFor(workType), price.outsourceAmount);
+        const amount = outsourceByUnit(report.workMinutes, unitQuantityFor(workType), resolved.unitPrice);
         row.officeWorkMinutes += report.workMinutes;
         row.officeWorkAmount += amount;
         addClientOutsource(report.clientId, "office", amount);
@@ -470,7 +492,8 @@ export function buildOutsourcePaymentSummary(data: AppData, month: string) {
           workKind: workType.name,
           quantity: report.workMinutes,
           quantityLabel: `${formatNumber(report.workMinutes)}分`,
-          unitPrice: price.outsourceAmount,
+          unitPrice: resolved.unitPrice,
+          priceSource: resolved.source,
           amount,
           memo: report.memo
         });

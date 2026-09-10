@@ -2,7 +2,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { monthFromDate, findPreviousReport } from "./calculations";
 import { fiscalStartMonth, fiscalYearFromDate, fiscalYearLabel, normalizeClosingMonth } from "./fiscal-year";
 import { defaultPaymentStatementSettings, sampleData } from "./sample-data";
-import type { AppData, AuditLog, BackupRecord, Client, DailyReport, MonthlyClosing, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkType } from "./types";
+import type { AppData, AuditLog, BackupRecord, Client, DailyReport, MonthlyClosing, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkerWorkTypeOutsourcePrice, WorkType } from "./types";
 
 const STORAGE_KEY = "sorting-daily-report-data";
 
@@ -63,6 +63,7 @@ function emptyAppData(): AppData {
     unitPrices: [],
     sortingUnitPrices: [],
     workerOutsourcePrices: [],
+    workerWorkTypeOutsourcePrices: [],
     workerShareLinks: [],
     paymentStatementSettings: defaultPaymentStatementSettings,
     reports: [],
@@ -85,6 +86,7 @@ function normalizeData(data: Partial<AppData>): AppData {
     unitPrices: (data.unitPrices ?? []).map((price) => ({ ...price, outsourceAmount: price.outsourceAmount ?? price.costAmount ?? 0 })),
     sortingUnitPrices: data.sortingUnitPrices ?? [],
     workerOutsourcePrices: data.workerOutsourcePrices ?? [],
+    workerWorkTypeOutsourcePrices: (data.workerWorkTypeOutsourcePrices ?? []).map((item) => ({ ...item, active: item.active ?? true })),
     workerShareLinks: data.workerShareLinks ?? [],
     paymentStatementSettings: { ...defaultPaymentStatementSettings, ...(data.paymentStatementSettings ?? {}) },
     reports: (data.reports ?? []).map((report) => {
@@ -275,6 +277,30 @@ function fromBackupRecord(input: BackupRecord) {
   };
 }
 
+function toWorkerWorkTypeOutsourcePrice(row: Record<string, unknown>): WorkerWorkTypeOutsourcePrice {
+  return {
+    id: String(row.id),
+    workerId: String(row.worker_id),
+    workTypeId: String(row.work_type_id),
+    outsourceUnitPrice: Number(row.outsource_unit_price ?? 0),
+    active: Boolean(row.is_active ?? true),
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? "")
+  };
+}
+
+function fromWorkerWorkTypeOutsourcePrice(input: WorkerWorkTypeOutsourcePrice) {
+  return {
+    id: input.id,
+    worker_id: input.workerId,
+    work_type_id: input.workTypeId,
+    outsource_unit_price: input.outsourceUnitPrice,
+    is_active: input.active,
+    created_at: input.createdAt,
+    updated_at: input.updatedAt
+  };
+}
+
 function toAuditLog(row: Record<string, unknown>): AuditLog {
   return {
     id: String(row.id),
@@ -400,7 +426,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
     };
   }
 
-  const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult, monthlyClosingsResult, backupRecordsResult, auditLogsResult] = await Promise.all([
+  const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerWorkTypeOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult, monthlyClosingsResult, backupRecordsResult, auditLogsResult] = await Promise.all([
     supabase.from("workers").select("*").order("name"),
     supabase.from("clients").select("*").order("name"),
     supabase.from("daily_reports").select("*").order("work_date", { ascending: false }),
@@ -408,6 +434,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
     supabase.from("unit_prices").select("*").order("work_type_id"),
     supabase.from("sorting_unit_prices").select("*").order("id"),
     supabase.from("worker_outsource_prices").select("*").order("worker_id"),
+    supabase.from("worker_work_type_outsource_prices").select("*").order("worker_id"),
     supabase.from("worker_share_links").select("*").order("worker_id"),
     supabase.from("payment_statement_settings").select("*").eq("id", "default").maybeSingle(),
     supabase.from("monthly_work_reports").select("*").order("work_date", { ascending: false }),
@@ -495,6 +522,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
         createdAt: row.created_at,
         updatedAt: row.updated_at
       })),
+      workerWorkTypeOutsourcePrices: workerWorkTypeOutsourcePricesResult.error ? [] : (workerWorkTypeOutsourcePricesResult.data ?? []).map(toWorkerWorkTypeOutsourcePrice),
       workerShareLinks: (workerShareLinksResult.data ?? []).map((row) => ({
         workerId: row.worker_id,
         token: row.token,
@@ -1093,6 +1121,45 @@ export async function updateWorkerOutsourcePrice(price: WorkerOutsourcePrice, cu
       updated_at: record.updatedAt
     });
   }
+  saveLocal(next);
+  return next;
+}
+
+export async function upsertWorkerWorkTypeOutsourcePrice(
+  input: Partial<WorkerWorkTypeOutsourcePrice> & Pick<WorkerWorkTypeOutsourcePrice, "workerId" | "workTypeId" | "outsourceUnitPrice">,
+  current: AppData
+) {
+  const supabase = supabaseClient();
+  const existing = input.id
+    ? current.workerWorkTypeOutsourcePrices.find((item) => item.id === input.id)
+    : current.workerWorkTypeOutsourcePrices.find((item) => item.workerId === input.workerId && item.workTypeId === input.workTypeId);
+  const record: WorkerWorkTypeOutsourcePrice = {
+    id: existing?.id ?? createId("worker-worktype-price"),
+    workerId: input.workerId,
+    workTypeId: input.workTypeId,
+    outsourceUnitPrice: Number(input.outsourceUnitPrice),
+    active: input.active ?? existing?.active ?? true,
+    createdAt: existing?.createdAt ?? nowIso(),
+    updatedAt: nowIso()
+  };
+  const next = {
+    ...current,
+    workerWorkTypeOutsourcePrices: [...current.workerWorkTypeOutsourcePrices.filter((item) => item.id !== record.id), record]
+  };
+  if (supabase) {
+    await supabase.from("worker_work_type_outsource_prices").upsert(fromWorkerWorkTypeOutsourcePrice(record), { onConflict: "worker_id,work_type_id" });
+  }
+  saveLocal(next);
+  return next;
+}
+
+export async function deleteWorkerWorkTypeOutsourcePrice(id: string, current: AppData) {
+  const supabase = supabaseClient();
+  const next = {
+    ...current,
+    workerWorkTypeOutsourcePrices: current.workerWorkTypeOutsourcePrices.filter((item) => item.id !== id)
+  };
+  if (supabase) await supabase.from("worker_work_type_outsource_prices").delete().eq("id", id);
   saveLocal(next);
   return next;
 }

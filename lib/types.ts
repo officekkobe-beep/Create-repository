@@ -92,6 +92,18 @@ export type WorkerOutsourcePrice = {
   updatedAt: string;
 };
 
+export type OutsourcePriceSource = "worker" | "default";
+
+export type WorkerWorkTypeOutsourcePrice = {
+  id: string;
+  workerId: string;
+  workTypeId: string;
+  outsourceUnitPrice: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type PaymentStatementSettings = {
   title: string;
   issuerName: string;
@@ -130,6 +142,7 @@ export type AppData = {
   unitPrices: UnitPrice[];
   sortingUnitPrices: SortingUnitPrice[];
   workerOutsourcePrices: WorkerOutsourcePrice[];
+  workerWorkTypeOutsourcePrices: WorkerWorkTypeOutsourcePrice[];
   workerShareLinks: WorkerShareLink[];
   paymentStatementSettings: PaymentStatementSettings;
   monthlyWorkReports: MonthlyWorkReport[];
@@ -273,6 +286,7 @@ export type OutsourceDetailRow = {
   quantity: number;
   quantityLabel: string;
   unitPrice: number;
+  priceSource?: OutsourcePriceSource;
   amount: number;
   memo: string;
 };

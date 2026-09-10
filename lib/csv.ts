@@ -1,4 +1,4 @@
-import { formatMinutes } from "./calculations";
+import { formatMinutes, resolveMonthlyOutsourceUnitPrice } from "./calculations";
 import type { AppData, ClientProfitabilityRow, ClientSummaryRow, DailyReport, MonthlyWorkReport, MonthlyWorkSummaryRow, SummaryRow, WorkerOutsourceSummaryRow } from "./types";
 
 function escapeCell(value: string | number) {
@@ -137,11 +137,14 @@ export function downloadMonthlyWorkReportCsv(month: string, reports: MonthlyWork
   const clients = new Map(data.clients.map((client) => [client.id, client.name]));
   const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
   const workTypes = new Map(data.workTypes.map((workType) => [workType.id, workType.name]));
-  const header = ["作業月", "作業日", "担当者", "顧問先", "作業種別", "書類数", "作業時間(分)", "メモ"];
+  const unitPrices = new Map(data.unitPrices.map((price) => [price.workTypeId, price]));
+  const header = ["作業月", "作業日", "担当者", "顧問先", "作業種別", "書類数", "作業時間(分)", "適用外注単価", "外注単価種別", "メモ"];
   const lines = [
     header.map(escapeCell).join(","),
-    ...reports.map((report) =>
-      [
+    ...reports.map((report) => {
+      const defaultOutsourceAmount = unitPrices.get(report.workTypeId)?.outsourceAmount ?? 0;
+      const resolved = resolveMonthlyOutsourceUnitPrice(data, report.workerId, report.workTypeId, defaultOutsourceAmount);
+      return [
         month,
         report.workDate,
         workers.get(report.workerId) ?? "未設定",
@@ -149,11 +152,13 @@ export function downloadMonthlyWorkReportCsv(month: string, reports: MonthlyWork
         workTypes.get(report.workTypeId) ?? "未設定",
         report.documentCount,
         report.workMinutes,
+        resolved.unitPrice,
+        resolved.source === "worker" ? "担当者別単価" : "作業種別デフォルト単価",
         report.memo
       ]
         .map(escapeCell)
-        .join(",")
-    )
+        .join(",");
+    })
   ];
   downloadCsv(`monthly_work_report_${month}.csv`, lines);
 }
