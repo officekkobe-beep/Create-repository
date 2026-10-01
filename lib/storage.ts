@@ -817,6 +817,35 @@ async function recordBlockedClosedMonth(current: AppData, targetMonth: string, m
   });
 }
 
+async function recordWorkLogChange(
+  current: AppData,
+  params: {
+    actionType: "update" | "delete";
+    targetType: "sorting_report" | "monthly_work_report";
+    targetId: string;
+    targetMonth: string;
+    message: string;
+    beforeData?: unknown;
+    afterData?: unknown;
+  }
+) {
+  try {
+    return await insertAuditLog(current, {
+      actionType: params.actionType,
+      targetType: params.targetType,
+      targetId: params.targetId,
+      targetMonth: params.targetMonth,
+      message: params.message,
+      beforeData: params.beforeData,
+      afterData: params.afterData,
+      createdBy: "admin"
+    });
+  } catch (error) {
+    console.error("操作履歴の記録に失敗しました", error);
+    return current;
+  }
+}
+
 export function latestClosingBackup(data: AppData, targetMonth: string) {
   return data.backupRecords
     .filter((record) => record.targetMonth === targetMonth && record.backupType === "full_json")
@@ -995,11 +1024,22 @@ export async function upsertReport(input: Partial<DailyReport> & ReportInput, cu
     createdAt: existing?.createdAt ?? nowIso(),
     updatedAt: nowIso()
   };
-  const next = {
+  let next = {
     ...current,
     reports: [...current.reports.filter((item) => item.id !== record.id), record].sort((a, b) => b.workDate.localeCompare(a.workDate))
   };
   if (supabase) await supabase.from("daily_reports").upsert(fromReport(record));
+  if (existing) {
+    next = await recordWorkLogChange(next, {
+      actionType: "update",
+      targetType: "sorting_report",
+      targetId: record.id,
+      targetMonth: workMonth,
+      message: "仕訳作業を修正しました",
+      beforeData: existing,
+      afterData: record
+    });
+  }
   saveLocal(next);
   return next;
 }
@@ -1011,8 +1051,18 @@ export async function deleteReport(id: string, current: AppData) {
     await recordBlockedClosedMonth(current, target.workMonth, CLOSED_MONTH_MESSAGE);
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
-  const next = { ...current, reports: current.reports.filter((item) => item.id !== id) };
+  let next = { ...current, reports: current.reports.filter((item) => item.id !== id) };
   if (supabase) await supabase.from("daily_reports").delete().eq("id", id);
+  if (target) {
+    next = await recordWorkLogChange(next, {
+      actionType: "delete",
+      targetType: "sorting_report",
+      targetId: id,
+      targetMonth: target.workMonth,
+      message: "仕訳作業を削除しました",
+      beforeData: target
+    });
+  }
   saveLocal(next);
   return next;
 }
@@ -1040,11 +1090,22 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
     createdAt: existing?.createdAt ?? nowIso(),
     updatedAt: nowIso()
   };
-  const next = {
+  let next = {
     ...current,
     monthlyWorkReports: [...current.monthlyWorkReports.filter((item) => item.id !== record.id), record].sort((a, b) => b.workDate.localeCompare(a.workDate))
   };
   if (supabase) await supabase.from("monthly_work_reports").upsert(fromMonthlyWorkReport(record));
+  if (existing) {
+    next = await recordWorkLogChange(next, {
+      actionType: "update",
+      targetType: "monthly_work_report",
+      targetId: record.id,
+      targetMonth: workMonth,
+      message: "月次作業を修正しました",
+      beforeData: existing,
+      afterData: record
+    });
+  }
   saveLocal(next);
   return next;
 }
@@ -1056,8 +1117,18 @@ export async function deleteMonthlyWorkReport(id: string, current: AppData) {
     await recordBlockedClosedMonth(current, target.workMonth, CLOSED_MONTH_MESSAGE);
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
-  const next = { ...current, monthlyWorkReports: current.monthlyWorkReports.filter((item) => item.id !== id) };
+  let next = { ...current, monthlyWorkReports: current.monthlyWorkReports.filter((item) => item.id !== id) };
   if (supabase) await supabase.from("monthly_work_reports").delete().eq("id", id);
+  if (target) {
+    next = await recordWorkLogChange(next, {
+      actionType: "delete",
+      targetType: "monthly_work_report",
+      targetId: id,
+      targetMonth: target.workMonth,
+      message: "月次作業を削除しました",
+      beforeData: target
+    });
+  }
   saveLocal(next);
   return next;
 }

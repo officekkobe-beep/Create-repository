@@ -293,6 +293,7 @@ export default function Home() {
   const [message, setMessage] = useState("");
   const [connectionWarning, setConnectionWarning] = useState("");
   const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "sorting" | "monthly"; id: string } | null>(null);
   const [closingNote, setClosingNote] = useState("");
   const [reopenReason, setReopenReason] = useState("");
   const [reopenConfirmText, setReopenConfirmText] = useState("");
@@ -442,11 +443,17 @@ export default function Home() {
     setWorkKind(kind);
     if (kind === "sorting") {
       setEditingSorting(null);
+      setEditingMonthly(null);
       setSortingForm(blankSorting(data));
       setSortingCountState(emptySortingCountState());
       return;
     }
-    setEditingMonthly(null);
+    if (editingMonthly) {
+      if (kind !== monthlyForm.workTypeId) {
+        setMonthlyForm({ ...monthlyForm, workTypeId: kind, documentCount: 0, workMinutes: 0 });
+      }
+      return;
+    }
     setMonthlyForm(blankMonthly(data, kind));
   }
 
@@ -558,6 +565,93 @@ export default function Home() {
     ];
   }
 
+  function sortingCompareFields(report: DailyReport) {
+    const worker = data.workers.find((item) => item.id === report.workerId);
+    const client = data.clients.find((item) => item.id === report.clientId);
+    const nextData = { ...data, reports: [...data.reports.filter((item) => item.id !== report.id), report] };
+    const allocation = sortingBillableForReport(nextData.reports.filter((item) => item.workMonth === report.workMonth), report);
+    const manualPrice = data.sortingUnitPrices.find((price) => price.id === "manual") ?? { amount: 60 };
+    const smartPrice = data.sortingUnitPrices.find((price) => price.id === "smart") ?? { amount: 40 };
+    const workerOutsource = data.workerOutsourcePrices.find((price) => price.workerId === report.workerId) ?? { manualUnitPrice: 40, smartUnitPrice: 20 };
+    const revenue = allocation.manualBillable * manualPrice.amount + allocation.smartBillable * smartPrice.amount;
+    const outsourceCost = report.manualCount * workerOutsource.manualUnitPrice + report.smartImportCount * workerOutsource.smartUnitPrice;
+    return {
+      作業日: report.workDate,
+      顧問先: client?.name ?? "未設定",
+      担当者: worker ? `${worker.code} ${worker.name}` : "未設定",
+      作業種別: "仕訳作業",
+      数量: `${formatNumber(report.totalSortingCount)}件`,
+      売上金額: formatCurrency(revenue),
+      外注費: formatCurrency(outsourceCost),
+      粗利: formatCurrency(revenue - outsourceCost),
+      メモ: displayMemo(report.memo)
+    };
+  }
+
+  function monthlyCompareFields(report: MonthlyWorkReport) {
+    const worker = data.workers.find((item) => item.id === report.workerId);
+    const client = data.clients.find((item) => item.id === report.clientId);
+    const workType = data.workTypes.find((item) => item.id === report.workTypeId);
+    const price = data.unitPrices.find((item) => item.workTypeId === report.workTypeId) ?? { amount: 0, outsourceAmount: 0 };
+    const quantity = workType?.unit === "time" ? report.workMinutes : report.documentCount;
+    const unitQuantity = workType ? unitQuantityFor(workType) : 1;
+    const resolvedOutsource = resolveMonthlyOutsourceUnitPrice(data, report.workerId, report.workTypeId, price.outsourceAmount);
+    const revenue = amountByUnit(quantity, unitQuantity, price.amount);
+    const outsourceCost = outsourceByUnit(quantity, unitQuantity, resolvedOutsource.unitPrice);
+    return {
+      作業日: report.workDate,
+      顧問先: client?.name ?? "未設定",
+      担当者: worker ? `${worker.code} ${worker.name}` : "未設定",
+      作業種別: workType?.name ?? "未設定",
+      数量: workType?.unit === "time" ? `${formatNumber(report.workMinutes)}分` : `${formatNumber(report.documentCount)}件`,
+      売上金額: formatCurrency(revenue),
+      外注費: formatCurrency(outsourceCost),
+      粗利: formatCurrency(revenue - outsourceCost),
+      メモ: displayMemo(report.memo)
+    };
+  }
+
+  function buildBeforeAfterRows(before: Record<string, string>, after: Record<string, string>) {
+    return Object.keys(after).map((label) => ({ label, before: before[label] ?? "-", after: after[label] }));
+  }
+
+  function sortingBeforeAfterRows() {
+    if (!editingSorting) return undefined;
+    const previous = previousTotalSortingCount ?? 0;
+    const after: DailyReport = {
+      ...editingSorting,
+      workDate: sortingForm.workDate,
+      workMonth: monthFromDate(sortingForm.workDate),
+      workerId: sortingForm.workerId,
+      clientId: sortingForm.clientId,
+      manualCount: sortingForm.manualCount,
+      smartImportCount: sortingForm.smartImportCount,
+      totalSortingCount: sortingForm.totalSortingCount,
+      memo: sortingForm.memo,
+      fiscalYear: sortingForm.fiscalYear,
+      previousTotalJournalCount: previous,
+      currentTotalJournalCount: sortingForm.totalSortingCount
+    };
+    return buildBeforeAfterRows(sortingCompareFields(editingSorting), sortingCompareFields(after));
+  }
+
+  function monthlyBeforeAfterRows() {
+    if (!editingMonthly) return undefined;
+    const workType = data.workTypes.find((item) => item.id === monthlyForm.workTypeId);
+    const after: MonthlyWorkReport = {
+      ...editingMonthly,
+      workDate: monthlyForm.workDate,
+      workMonth: monthFromDate(monthlyForm.workDate),
+      workerId: monthlyForm.workerId,
+      clientId: monthlyForm.clientId,
+      workTypeId: monthlyForm.workTypeId,
+      documentCount: workType?.unit === "count" ? monthlyForm.documentCount : 0,
+      workMinutes: workType?.unit === "time" ? monthlyForm.workMinutes : 0,
+      memo: monthlyForm.memo
+    };
+    return buildBeforeAfterRows(monthlyCompareFields(editingMonthly), monthlyCompareFields(after));
+  }
+
   async function submitSorting(event: FormEvent) {
     event.preventDefault();
     if (isMonthClosed(data, monthFromDate(sortingForm.workDate))) return notify(CLOSED_MONTH_MESSAGE);
@@ -639,26 +733,47 @@ export default function Home() {
     setMainTab("input");
   }
 
-  async function removeSortingReport(id: string) {
+  function removeSortingReport(id: string) {
     const report = data.reports.find((item) => item.id === id);
     if (report && isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
+    setDeleteTarget({ kind: "sorting", id });
+  }
+
+  function removeMonthlyReport(id: string) {
+    const report = data.monthlyWorkReports.find((item) => item.id === id);
+    if (report && isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
+    setDeleteTarget({ kind: "monthly", id });
+  }
+
+  async function confirmDeleteTarget() {
+    if (!deleteTarget) return;
     try {
-      setData(await deleteReport(id, data));
-      notify("仕訳作業を削除しました。");
+      if (deleteTarget.kind === "sorting") {
+        setData(await deleteReport(deleteTarget.id, data));
+        notify("仕訳作業を削除しました。");
+      } else {
+        setData(await deleteMonthlyWorkReport(deleteTarget.id, data));
+        notify("作業を削除しました。");
+      }
     } catch (error) {
       notify(errorMessage(error));
+    } finally {
+      setDeleteTarget(null);
     }
   }
 
-  async function removeMonthlyReport(id: string) {
-    const report = data.monthlyWorkReports.find((item) => item.id === id);
-    if (report && isMonthClosed(data, report.workMonth)) return notify(CLOSED_MONTH_MESSAGE);
-    try {
-      setData(await deleteMonthlyWorkReport(id, data));
-      notify("作業を削除しました。");
-    } catch (error) {
-      notify(errorMessage(error));
+  function deleteTargetRows() {
+    if (!deleteTarget) return [];
+    if (deleteTarget.kind === "sorting") {
+      const report = data.reports.find((item) => item.id === deleteTarget.id);
+      if (!report) return [];
+      const fields = sortingCompareFields(report);
+      return Object.entries(fields).map(([label, value]) => [label, value]);
     }
+    const report = data.monthlyWorkReports.find((item) => item.id === deleteTarget.id);
+    if (!report) return [];
+    const fields = monthlyCompareFields(report);
+    return Object.entries(fields).map(([label, value]) => [label, value]);
   }
 
   async function executeMonthlyClosing() {
@@ -1131,9 +1246,24 @@ export default function Home() {
       </div>
       {!connectionWarning && confirmKind ? (
         <ConfirmModal
-          rows={confirmKind === "sorting" ? sortingPreviewRows() : monthlyPreviewRows()}
+          title={(confirmKind === "sorting" ? editingSorting : editingMonthly) ? "修正内容の確認" : "入力内容の確認"}
+          description={(confirmKind === "sorting" ? editingSorting : editingMonthly) ? "修正前・修正後の内容を確認し、問題なければ更新してください。" : "内容を確認し、問題なければ保存してください。"}
+          confirmLabel={(confirmKind === "sorting" ? editingSorting : editingMonthly) ? "この内容で更新" : "この内容で保存"}
+          rows={confirmKind === "sorting" ? (editingSorting ? undefined : sortingPreviewRows()) : editingMonthly ? undefined : monthlyPreviewRows()}
+          beforeAfterRows={confirmKind === "sorting" ? sortingBeforeAfterRows() : monthlyBeforeAfterRows()}
           onCancel={() => setConfirmKind(null)}
           onConfirm={confirmKind === "sorting" ? confirmSaveSorting : confirmSaveMonthly}
+        />
+      ) : null}
+      {!connectionWarning && deleteTarget ? (
+        <ConfirmModal
+          title="削除の確認"
+          description="この作業日報を削除します。よろしいですか？"
+          cancelLabel="キャンセル"
+          confirmLabel="削除する"
+          rows={deleteTargetRows()}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={confirmDeleteTarget}
         />
       ) : null}
     </main>
@@ -1203,29 +1333,68 @@ function SubmitRow({ label }: { label: string }) {
   return <div className="lg:col-span-2"><button className="button-primary" type="submit">{label}</button></div>;
 }
 
-function ConfirmModal({ rows, onCancel, onConfirm }: { rows: string[][]; onCancel: () => void; onConfirm: () => void }) {
+function ConfirmModal({
+  title = "入力内容の確認",
+  description = "内容を確認し、問題なければ保存してください。",
+  rows,
+  beforeAfterRows,
+  cancelLabel = "修正する",
+  confirmLabel = "この内容で保存",
+  onCancel,
+  onConfirm
+}: {
+  title?: string;
+  description?: string;
+  rows?: string[][];
+  beforeAfterRows?: { label: string; before: string; after: string }[];
+  cancelLabel?: string;
+  confirmLabel?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-4 py-6">
       <section className="max-h-[90vh] w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-soft">
         <div className="border-b border-line px-5 py-4">
-          <h2 className="text-xl font-bold">入力内容の確認</h2>
-          <p className="mt-1 text-sm text-slate-500">内容を確認し、問題なければ保存してください。</p>
+          <h2 className="text-xl font-bold">{title}</h2>
+          <p className="mt-1 text-sm text-slate-500">{description}</p>
         </div>
         <div className="max-h-[62vh] overflow-y-auto p-5">
-          <table className="w-full border-collapse text-sm">
-            <tbody>
-              {rows.map(([label, value]) => (
-                <tr key={label} className="border-b border-line last:border-b-0">
-                  <th className="w-40 bg-slate-50 px-3 py-3 text-left font-bold text-slate-600">{label}</th>
-                  <td className="px-3 py-3 font-semibold text-ink">{value}</td>
+          {beforeAfterRows ? (
+            <table className="w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="w-32 bg-slate-50 px-3 py-2 text-left font-bold text-slate-600">項目</th>
+                  <th className="bg-slate-50 px-3 py-2 text-left font-bold text-slate-600">修正前</th>
+                  <th className="bg-slate-50 px-3 py-2 text-left font-bold text-slate-600">修正後</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {beforeAfterRows.map((row) => (
+                  <tr key={row.label} className="border-b border-line last:border-b-0">
+                    <th className="bg-slate-50 px-3 py-3 text-left font-bold text-slate-600">{row.label}</th>
+                    <td className="px-3 py-3 text-slate-500">{row.before}</td>
+                    <td className={`px-3 py-3 font-semibold ${row.before !== row.after ? "text-rose-600" : "text-ink"}`}>{row.after}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <table className="w-full border-collapse text-sm">
+              <tbody>
+                {(rows ?? []).map(([label, value]) => (
+                  <tr key={label} className="border-b border-line last:border-b-0">
+                    <th className="w-40 bg-slate-50 px-3 py-3 text-left font-bold text-slate-600">{label}</th>
+                    <td className="px-3 py-3 font-semibold text-ink">{value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
         <div className="flex flex-col-reverse gap-2 border-t border-line px-5 py-4 sm:flex-row sm:justify-end">
-          <button className="button-secondary" type="button" onClick={onCancel}>修正する</button>
-          <button className="button-primary" type="button" onClick={onConfirm}>この内容で保存</button>
+          <button className="button-secondary" type="button" onClick={onCancel}>{cancelLabel}</button>
+          <button className="button-primary" type="button" onClick={onConfirm}>{confirmLabel}</button>
         </div>
       </section>
     </div>
