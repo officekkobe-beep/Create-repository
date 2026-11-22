@@ -39,11 +39,11 @@ alter table monthly_closings enable row level security;
 alter table audit_logs enable row level security;
 
 -- 2) 権限そのものを取り消す（TRUNCATE等を含む全権限）。関数・シーケンスも対象。
-revoke all on all tables in schema public from anon, authenticated;
-revoke all on all sequences in schema public from anon, authenticated;
+revoke all on all tables in schema public from PUBLIC, anon, authenticated;
+revoke all on all sequences in schema public from PUBLIC, anon, authenticated;
 revoke execute on all functions in schema public from anon, authenticated, public;
 
 -- 3) 今後作るテーブル等にも自動で権限が付かないようにする（実行ユーザー postgres が作成するもの）。
-alter default privileges for role postgres in schema public revoke all on tables from anon, authenticated;
-alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on tables from PUBLIC, anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on sequences from PUBLIC, anon, authenticated;
 alter default privileges for role postgres in schema public revoke execute on functions from anon, authenticated, public;
