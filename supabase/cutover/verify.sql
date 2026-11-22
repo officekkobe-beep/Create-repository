@@ -42,3 +42,14 @@ select
   count(*) filter (where token_hash is not null) as hashed_tokens,
   count(*) filter (where first_used_at is not null) as used_links
 from worker_share_links;
+
+-- H. 実効的に公開ロールから利用できるテーブル権限（PUBLICからの継承も含む。0行であること）
+-- information_schema.role_table_grantsだけではPUBLICを介した実効権限を見落とす場合がある。
+select c.relname as relation_name, roles.role_name, actions.privilege
+from pg_class c
+join pg_namespace n on n.oid = c.relnamespace
+cross join (values ('anon'),('authenticated')) as roles(role_name)
+cross join (values ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER')) as actions(privilege)
+where n.nspname = 'public' and c.relkind in ('r','p','v','m','f')
+  and has_table_privilege(roles.role_name,c.oid,actions.privilege)
+order by c.relname,roles.role_name,actions.privilege;
