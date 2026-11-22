@@ -124,7 +124,7 @@ function saveLocal(data: AppData) {
   if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
 
-function toReport(row: Record<string, unknown>): DailyReport {
+export function toReport(row: Record<string, unknown>): DailyReport {
   const workDate = String(row.work_date);
   const clientClosingMonth = normalizeClosingMonth(row.client_closing_month as number | undefined);
   const fiscalYear = Number.isInteger(row.fiscal_year) ? Number(row.fiscal_year) : Number(workDate.slice(0, 4)) || new Date().getFullYear();
@@ -151,7 +151,7 @@ function toReport(row: Record<string, unknown>): DailyReport {
   };
 }
 
-function fromReport(input: DailyReport) {
+export function fromReport(input: DailyReport) {
   return {
     id: input.id,
     work_date: input.workDate,
@@ -175,7 +175,7 @@ function fromReport(input: DailyReport) {
   };
 }
 
-function toMonthlyWorkReport(row: Record<string, unknown>): MonthlyWorkReport {
+export function toMonthlyWorkReport(row: Record<string, unknown>): MonthlyWorkReport {
   return {
     id: String(row.id),
     workDate: String(row.work_date),
@@ -193,7 +193,7 @@ function toMonthlyWorkReport(row: Record<string, unknown>): MonthlyWorkReport {
   };
 }
 
-function fromMonthlyWorkReport(input: MonthlyWorkReport) {
+export function fromMonthlyWorkReport(input: MonthlyWorkReport) {
   return {
     id: input.id,
     work_date: input.workDate,
