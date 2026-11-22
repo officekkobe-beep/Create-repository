@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { afterEach, describe, expect, it } from "vitest";
 import { ADMIN_COMMANDS, closingTotals, runAdminCommand } from "./admin-commands";
-import { CLOSED_MONTH_MESSAGE } from "../storage";
+import { CLOSED_MONTH_MESSAGE, setServerSupabaseClient } from "../storage";
 import type { AppData, MonthlyClosing, MonthlyWorkReport } from "../types";
 
 // DB接続なし（環境変数未設定）で既存の保存処理をメモリ上のデータに対して実行する。
@@ -107,6 +108,29 @@ describe("仕訳日報の保存", () => {
   it("文字列の件数や不整合は拒否", async () => {
     await expect(runAdminCommand("report.upsert", { input: { ...input, manualCount: "10" } }, data(), ctx)).rejects.toThrow();
     await expect(runAdminCommand("report.upsert", { input: { ...input, manualCount: 11 } }, data(), ctx)).rejects.toThrow("一致していません");
+  });
+});
+
+describe("DB書き込みの失敗", () => {
+  function failingClient() {
+    const chain: Record<string, unknown> = {};
+    const handler: ProxyHandler<Record<string, unknown>> = {
+      get: (_target, prop) => {
+        if (prop === "then") return (resolve: (value: unknown) => void) => resolve({ data: null, error: { message: "boom" } });
+        return () => proxy;
+      }
+    };
+    const proxy = new Proxy(chain, handler);
+    return proxy as unknown as SupabaseClient;
+  }
+
+  afterEach(() => setServerSupabaseClient(null));
+
+  it("書き込みに失敗したら成功扱いにせずエラーにする", async () => {
+    setServerSupabaseClient(failingClient());
+    const current = data({ monthlyWorkReports: [monthlyReport({ workDate: "2026-11-01", workMonth: "2026-11" })] });
+    await expect(runAdminCommand("monthlyReport.delete", { id: "m1" }, current, ctx)).rejects.toThrow("データの保存に失敗しました");
+    await expect(runAdminCommand("monthlyReport.upsert", { input: monthlyInput }, data(), ctx)).rejects.toThrow("データの保存に失敗しました");
   });
 });
 

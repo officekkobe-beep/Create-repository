@@ -5,6 +5,7 @@ import {
   isAllowedFiscalYear,
   isDuplicateMonthly,
   isDuplicateSorting,
+  isUnusuallyLarge,
   isValidWorkDate,
   parseMonthlyInput,
   parseSortingInput,
@@ -16,6 +17,7 @@ import {
   type MonthlyInput,
   type SortingInput
 } from "./work-report-rules";
+import { allowRequest } from "./rate-limit";
 import type { DailyReport, MonthlyWorkReport } from "../types";
 
 const NOW = "2026-11-23T00:00:00.000Z";
@@ -123,6 +125,31 @@ describe("重複の検出", () => {
     expect(isDuplicateMonthly([monthlyReport({ documentCount: 6 })], "w1", monthly, "count")).toBe(false);
     expect(isDuplicateMonthly([monthlyReport({ workTypeId: "t2" })], "w1", monthly, "count")).toBe(false);
     expect(isDuplicateMonthly([monthlyReport({ workMinutes: 30, documentCount: 0 })], "w1", { ...monthly, documentCount: 0, workMinutes: 30 }, "time")).toBe(true);
+  });
+});
+
+describe("異常値の確認（仮基準: 過去5件以上の中央値の5倍超）", () => {
+  it("実績が5件未満なら判定しない", () => {
+    expect(isUnusuallyLarge([10, 10, 10, 10], 1000)).toBe(false);
+  });
+  it("中央値の5倍を超えると確認対象、5倍ちょうどは対象外", () => {
+    const history = [8, 10, 10, 12, 100];
+    expect(isUnusuallyLarge(history, 51)).toBe(true);
+    expect(isUnusuallyLarge(history, 50)).toBe(false);
+  });
+  it("0件の実績は除外して判定", () => {
+    expect(isUnusuallyLarge([0, 0, 0, 10, 10, 10, 10, 10], 60)).toBe(true);
+    expect(isUnusuallyLarge([0, 0, 0, 0, 0, 10], 1000)).toBe(false);
+  });
+});
+
+describe("回数制限", () => {
+  it("時間枠内の上限を超えると拒否し、時間が経てば再び許可", () => {
+    const key = `test-${Math.random()}`;
+    expect(allowRequest(key, 2, 1000, 0)).toBe(true);
+    expect(allowRequest(key, 2, 1000, 10)).toBe(true);
+    expect(allowRequest(key, 2, 1000, 20)).toBe(false);
+    expect(allowRequest(key, 2, 1000, 1100)).toBe(true);
   });
 });
 

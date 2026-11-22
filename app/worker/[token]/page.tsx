@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { findPreviousReport, formatNumber, monthFromDate } from "@/lib/calculations";
+import { formatNumber, monthFromDate } from "@/lib/calculations";
 import {
   calculateSortingCountState,
   emptySortingCountState,
@@ -12,8 +12,8 @@ import {
   type SortingCountKey,
   type SortingCountState
 } from "@/lib/sorting-count";
-import { fetchData, isMonthClosed, upsertMonthlyWorkReport, upsertReport } from "@/lib/storage";
-import type { AppData, MonthlyWorkReportInput, ReportInput, Worker } from "@/lib/types";
+import { isMonthClosed } from "@/lib/storage";
+import type { AppData, MonthlyWorkReportInput, ReportInput, Worker, WorkUnit } from "@/lib/types";
 import { SupabaseConnectionProblemPanel } from "@/components/SupabaseConnectionProblemPanel";
 import { fiscalStartMonth, fiscalYearFromDate, fiscalYearOptions, normalizeClosingMonth } from "@/lib/fiscal-year";
 
@@ -48,6 +48,30 @@ const emptyData: AppData = {
   backupRecords: [],
   auditLogs: []
 };
+
+type WorkerBootstrap = {
+  ok?: boolean;
+  error?: string;
+  worker?: { id: string; code: string; name: string };
+  clients?: { id: string; name: string; closingMonth: number }[];
+  workTypes?: { id: string; code: string; name: string; unit: WorkUnit }[];
+  closedMonths?: string[];
+};
+
+type SaveResult = { ok?: boolean; error?: string; needsConfirmation?: boolean; warnings?: string[] };
+
+// 外注者APIの最小応答を、既存の画面部品が使う AppData の形に当てはめる（単価等は受け取らない）。
+function toWorkerAppData(result: WorkerBootstrap): AppData {
+  return {
+    ...emptyData,
+    clients: (result.clients ?? []).map((client) => ({ ...client, code: "", active: true, createdAt: "" })),
+    workTypes: (result.workTypes ?? []).map((workType) => ({ ...workType, active: true, createdAt: "" })),
+    monthlyClosings: (result.closedMonths ?? []).map((targetMonth) => ({
+      id: targetMonth, targetMonth, isClosed: true, closedAt: "", closedBy: "", closingBackupId: "", salesTotal: 0, outsourceTotal: 0,
+      grossProfit: 0, reportCount: 0, note: "", reopenedAt: "", reopenedBy: "", reopenReason: "", createdAt: "", updatedAt: ""
+    }))
+  };
+}
 
 function todayDate() {
   return new Date().toISOString().slice(0, 10);
@@ -106,34 +130,61 @@ export default function WorkerInputPage() {
   const [monthlyForm, setMonthlyForm] = useState<MonthlyWorkReportInput>(blankMonthly("", emptyData, "sorting"));
   const [sortingCountState, setSortingCountState] = useState<SortingCountState>(emptySortingCountState());
   const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
+  const [previousTotal, setPreviousTotal] = useState<number | undefined>(undefined);
+  const [previousRefreshKey, setPreviousRefreshKey] = useState(0);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    fetchData().then((result) => {
-      const link = result.data.workerShareLinks.find((item) => item.token === token && item.active);
-      const matchedWorker = link ? result.data.workers.find((item) => item.id === link.workerId && item.active) : undefined;
-      setData(result.data);
-      setConnectionWarning(result.error ?? "");
-      setWorker(matchedWorker ?? null);
-      if (matchedWorker) {
-        const firstWorkTypeId = result.data.workTypes.find((workType) => workType.active)?.id ?? "sorting";
-        setSortingForm(blankSorting(matchedWorker.id, result.data));
-        setMonthlyForm(blankMonthly(matchedWorker.id, result.data, firstWorkTypeId));
-      }
-      setLoading(false);
-    });
+    let cancelled = false;
+    fetch(`/api/worker/${encodeURIComponent(token)}`, { cache: "no-store" })
+      .then(async (response) => {
+        const result = (await response.json().catch(() => ({}))) as WorkerBootstrap;
+        if (cancelled) return;
+        if (response.status === 404) {
+          setWorker(null);
+          return;
+        }
+        if (!response.ok || !result.worker) {
+          setConnectionWarning(result.error ?? "データの取得に失敗しました。");
+          return;
+        }
+        const nextData = toWorkerAppData(result);
+        const matchedWorker: Worker = { ...result.worker, active: true, createdAt: "" };
+        setData(nextData);
+        setWorker(matchedWorker);
+        const firstWorkTypeId = nextData.workTypes[0]?.id ?? "sorting";
+        setSortingForm(blankSorting(matchedWorker.id, nextData));
+        setMonthlyForm(blankMonthly(matchedWorker.id, nextData, firstWorkTypeId));
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionWarning("サーバーに接続できませんでした。通信環境を確認してください。");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
-  const previousSorting = useMemo(() => {
-    if (!worker || !sortingForm.clientId || !sortingForm.workDate) return undefined;
-    return findPreviousReport(data.reports, {
-      id: "",
-      clientId: sortingForm.clientId,
-      workDate: sortingForm.workDate,
-      createdAt: new Date().toISOString(),
-      fiscalYear: sortingForm.fiscalYear
-    });
-  }, [data.reports, sortingForm.clientId, sortingForm.workDate, sortingForm.fiscalYear, worker]);
-  const previousTotal = previousSorting?.totalSortingCount;
+  useEffect(() => {
+    if (!worker || !sortingForm.clientId || !sortingForm.workDate) {
+      setPreviousTotal(undefined);
+      return;
+    }
+    let cancelled = false;
+    const query = new URLSearchParams({ clientId: sortingForm.clientId, workDate: sortingForm.workDate, fiscalYear: String(sortingForm.fiscalYear) });
+    fetch(`/api/worker/${encodeURIComponent(token)}/previous-total?${query.toString()}`, { cache: "no-store" })
+      .then(async (response) => {
+        const result = (await response.json().catch(() => ({}))) as { ok?: boolean; previousTotal?: number; isFirst?: boolean };
+        if (cancelled || !response.ok) return;
+        setPreviousTotal(result.isFirst ? undefined : result.previousTotal);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, worker, sortingForm.clientId, sortingForm.workDate, sortingForm.fiscalYear, previousRefreshKey]);
   const selectedWorkType = useMemo(() => data.workTypes.find((workType) => workType.id === monthlyForm.workTypeId), [data.workTypes, monthlyForm.workTypeId]);
   const sortingClosingMonth = clientClosingMonth(data, sortingForm.clientId);
   const sortingFiscalStartMonth = fiscalStartMonth(sortingClosingMonth);
@@ -207,13 +258,54 @@ export default function WorkerInputPage() {
     setConfirmKind("sorting");
   }
 
+  // 重複・異常値の警告が返った場合は確認し、了承されたときだけ confirmed: true で再送する。
+  async function postReport(payload: Record<string, unknown>) {
+    const send = async (confirmed: boolean) => {
+      const response = await fetch(`/api/worker/${encodeURIComponent(token)}/reports`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, confirmed })
+      });
+      return { response, result: (await response.json().catch(() => ({}))) as SaveResult };
+    };
+    setSaving(true);
+    try {
+      let { response, result } = await send(false);
+      if (response.status === 409 && result.needsConfirmation) {
+        const warnings = (result.warnings ?? [result.error ?? ""]).join("\n");
+        if (!window.confirm(`${warnings}\n\nこのまま登録しますか？`)) return false;
+        ({ response, result } = await send(true));
+      }
+      if (!response.ok || !result.ok) {
+        notify(result.error ?? "保存に失敗しました。");
+        return false;
+      }
+      return true;
+    } catch {
+      notify("サーバーに接続できませんでした。通信環境を確認してください。");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function confirmSaveSorting() {
-    if (!worker) return;
-    const next = await upsertReport({ ...sortingForm, workerId: worker.id, source: "worker_link", sourceWorkerId: worker.id }, data);
-    setData(next);
-    setSortingForm(blankSorting(worker.id, next));
-    setSortingCountState(emptySortingCountState());
+    if (!worker || saving) return;
+    const saved = await postReport({
+      kind: "sorting",
+      workDate: sortingForm.workDate,
+      clientId: sortingForm.clientId,
+      fiscalYear: sortingForm.fiscalYear,
+      totalSortingCount: sortingForm.totalSortingCount,
+      manualCount: sortingForm.manualCount,
+      smartImportCount: sortingForm.smartImportCount,
+      memo: sortingForm.memo
+    });
     setConfirmKind(null);
+    if (!saved) return;
+    setSortingForm(blankSorting(worker.id, data));
+    setSortingCountState(emptySortingCountState());
+    setPreviousRefreshKey((key) => key + 1);
     notify("作業を登録しました");
   }
 
@@ -230,24 +322,21 @@ export default function WorkerInputPage() {
   }
 
   async function confirmSaveMonthly() {
-    if (!worker) return;
+    if (!worker || saving) return;
     const workType = data.workTypes.find((item) => item.id === workKind);
     if (!workType) return notify("作業種別を選択してください");
-    const next = await upsertMonthlyWorkReport(
-      {
-        ...monthlyForm,
-        workerId: worker.id,
-        workTypeId: workType.id,
-        documentCount: workType.unit === "count" ? monthlyForm.documentCount : 0,
-        workMinutes: workType.unit === "time" ? monthlyForm.workMinutes : 0,
-        source: "worker_link",
-        sourceWorkerId: worker.id
-      },
-      data
-    );
-    setData(next);
-    setMonthlyForm(blankMonthly(worker.id, next, workType.id));
+    const saved = await postReport({
+      kind: "monthly",
+      workDate: monthlyForm.workDate,
+      clientId: monthlyForm.clientId,
+      workTypeId: workType.id,
+      documentCount: workType.unit === "count" ? monthlyForm.documentCount : 0,
+      workMinutes: workType.unit === "time" ? monthlyForm.workMinutes : 0,
+      memo: monthlyForm.memo
+    });
     setConfirmKind(null);
+    if (!saved) return;
+    setMonthlyForm(blankMonthly(worker.id, data, workType.id));
     notify("作業を登録しました");
   }
 
@@ -260,7 +349,7 @@ export default function WorkerInputPage() {
       ["作業種別", "仕訳作業"],
       ["対象年度", `${sortingForm.fiscalYear}年度`],
       ["決算月", `${sortingClosingMonth}月`],
-      ["前回総仕訳数", `${formatNumber(previousTotal ?? 0)}件${previousSorting ? "" : "（初回）"}`],
+      ["前回総仕訳数", `${formatNumber(previousTotal ?? 0)}件${previousTotal === undefined ? "（初回）" : ""}`],
       ["今回総仕訳数", `${formatNumber(sortingForm.totalSortingCount)}件`],
       ["今回作業件数", `${formatNumber(sortingForm.totalSortingCount - (previousTotal ?? 0))}件`],
       ["手入力件数", `${formatNumber(sortingForm.manualCount)}件`],

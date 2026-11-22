@@ -84,6 +84,18 @@ export async function loadMonthlyReportsOn(supabase: SupabaseClient, clientId: s
   return (result.data ?? []).map(toMonthlyWorkReport);
 }
 
+export async function loadRecentMonthlyQuantities(supabase: SupabaseClient, clientId: string, workTypeId: string, unit: WorkUnit) {
+  const result = await supabase
+    .from("monthly_work_reports")
+    .select("document_count, work_minutes")
+    .eq("client_id", clientId)
+    .eq("work_type_id", workTypeId)
+    .order("work_date", { ascending: false })
+    .limit(20);
+  if (result.error) fail("月次作業日報の取得", result.error);
+  return (result.data ?? []).map((row) => Number(unit === "count" ? row.document_count : row.work_minutes) || 0);
+}
+
 export async function insertSortingReport(supabase: SupabaseClient, record: DailyReport) {
   const result = await supabase.from("daily_reports").insert(fromReport(record));
   if (result.error) fail("仕訳日報の保存", result.error);

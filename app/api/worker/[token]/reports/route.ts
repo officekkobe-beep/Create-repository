@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
+import { monthFromDate } from "@/lib/calculations";
 import { isSameOrigin } from "@/lib/server/admin-guard";
+import { allowRequest } from "@/lib/server/rate-limit";
 import { createServiceClient } from "@/lib/server/supabase-service";
 import {
+  anomalyMessage,
   buildMonthlyRecord,
   buildSortingRecord,
   DUPLICATE_MESSAGE,
   isAllowedFiscalYear,
   isDuplicateMonthly,
   isDuplicateSorting,
+  isUnusuallyLarge,
   parseMonthlyInput,
   parseSortingInput,
   previousTotalFor,
@@ -24,9 +28,9 @@ import {
   insertSortingReport,
   isMonthClosedInDb,
   loadMonthlyReportsOn,
+  loadRecentMonthlyQuantities,
   loadSortingReports
 } from "@/lib/server/work-repository";
-import { monthFromDate } from "@/lib/calculations";
 
 export const dynamic = "force-dynamic";
 
@@ -34,14 +38,20 @@ function reject(status: number, error: string, extra: Record<string, unknown> = 
   return NextResponse.json({ ok: false, error, ...extra }, { status });
 }
 
+function needsConfirmation(warnings: string[]) {
+  return reject(409, warnings.join("\n"), { code: "needs_confirmation", needsConfirmation: true, warnings });
+}
+
 // 担当者はトークンから決定する（リクエスト本文の担当者IDは使わない）。外注者は新規登録のみで、編集・削除はできない。
+// 重複・異常値は拒否せず確認を求め、confirmed: true で再送された場合のみ保存する。
 export async function POST(request: Request, { params }: { params: Promise<{ token: string }> }) {
   if (!isSameOrigin(request)) return reject(403, "不正なリクエストです。");
   const supabase = createServiceClient();
   if (!supabase) return reject(503, "サーバーの設定が完了していません。");
   const { token } = await params;
+  if (!allowRequest(`worker:${token}`, 20, 60_000)) return reject(429, "短時間に送信が続いています。少し待ってから再度お試しください。");
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-  const confirmDuplicate = body?.confirmDuplicate === true;
+  const confirmed = body?.confirmed === true;
 
   try {
     const worker = await findWorkerByToken(supabase, token);
@@ -60,7 +70,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
       const previousTotal = previousTotalFor(reports, input, now);
       const countError = validateSortingCounts(input, previousTotal);
       if (countError) return reject(400, countError);
-      if (!confirmDuplicate && isDuplicateSorting(reports, worker.id, input)) return reject(409, DUPLICATE_MESSAGE, { code: "duplicate", needsConfirmation: true });
+      if (!confirmed) {
+        const warnings: string[] = [];
+        if (isDuplicateSorting(reports, worker.id, input)) warnings.push(DUPLICATE_MESSAGE);
+        const history = reports.map((report) => report.manualCount + report.smartImportCount);
+        if (isUnusuallyLarge(history, input.manualCount + input.smartImportCount)) warnings.push(anomalyMessage("今回作業件数"));
+        if (warnings.length) return needsConfirmation(warnings);
+      }
       const record = buildSortingRecord({ id: `report-${randomUUID()}`, input, workerId: worker.id, clientClosingMonth: client.closingMonth, previousTotal, source: "worker_link", sourceWorkerId: worker.id, now });
       await insertSortingReport(supabase, record);
       return NextResponse.json({ ok: true, report: record });
@@ -76,8 +92,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
       const quantityError = validateMonthlyQuantity(input, workType.unit);
       if (quantityError) return reject(400, quantityError);
       if (await isMonthClosedInDb(supabase, monthFromDate(input.workDate))) return reject(409, WORKER_CLOSED_MONTH_MESSAGE, { code: "closed_month" });
-      const sameDay = await loadMonthlyReportsOn(supabase, input.clientId, input.workDate);
-      if (!confirmDuplicate && isDuplicateMonthly(sameDay, worker.id, input, workType.unit)) return reject(409, DUPLICATE_MESSAGE, { code: "duplicate", needsConfirmation: true });
+      if (!confirmed) {
+        const warnings: string[] = [];
+        const sameDay = await loadMonthlyReportsOn(supabase, input.clientId, input.workDate);
+        if (isDuplicateMonthly(sameDay, worker.id, input, workType.unit)) warnings.push(DUPLICATE_MESSAGE);
+        const history = await loadRecentMonthlyQuantities(supabase, input.clientId, input.workTypeId, workType.unit);
+        const quantity = workType.unit === "count" ? input.documentCount : input.workMinutes;
+        if (isUnusuallyLarge(history, quantity)) warnings.push(anomalyMessage(workType.unit === "count" ? "数量" : "作業時間"));
+        if (warnings.length) return needsConfirmation(warnings);
+      }
       const record = buildMonthlyRecord({ id: `monthly-work-${randomUUID()}`, input, workerId: worker.id, unit: workType.unit, source: "worker_link", sourceWorkerId: worker.id, now });
       await insertMonthlyReport(supabase, record);
       return NextResponse.json({ ok: true, report: record });

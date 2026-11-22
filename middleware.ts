@@ -1,8 +1,8 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
-import { hardenCookieOptions } from "@/lib/server/admin-guard";
+import { hardenCookieOptions, isAllowedAdminEmail } from "@/lib/server/admin-guard";
 
-// 管理者APIのセッション（Supabase Authのトークン）を更新し、Cookieを再発行する。
+// 管理者セッション（Supabase Authのトークン）を更新し、未ログインで管理画面を開いた場合はログイン画面へ移動する。
 export async function middleware(request: NextRequest) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -20,8 +20,12 @@ export async function middleware(request: NextRequest) {
       }
     }
   });
-  await supabase.auth.getUser();
+  const { data } = await supabase.auth.getUser();
+
+  if (request.nextUrl.pathname === "/" && !isAllowedAdminEmail(data.user?.email, process.env.ADMIN_EMAIL)) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
   return response;
 }
 
-export const config = { matcher: ["/api/admin/:path*"] };
+export const config = { matcher: ["/", "/api/admin/:path*"] };

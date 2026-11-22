@@ -48,10 +48,14 @@ function assertUniqueCode<T extends { id: string; code: string }>(items: T[], id
   }
 }
 
+function assertWrite(result: { error: { message: string } | null }) {
+  if (result.error) throw new Error(`データの保存に失敗しました: ${result.error.message}`);
+}
+
 let serverClient: SupabaseClient | null = null;
 
 // 管理者API（サーバー）から、同じ保存処理をサービスキーのクライアントで実行するための差し替え口。
-export function setServerSupabaseClient(client: SupabaseClient) {
+export function setServerSupabaseClient(client: SupabaseClient | null) {
   serverClient = client;
 }
 
@@ -590,8 +594,8 @@ export async function upsertWorker(worker: Partial<Worker> & Pick<Worker, "name"
     ];
   }
   if (supabase) {
-    await supabase.from("workers").upsert({ id: record.id, worker_code: record.code, name: record.name, active: record.active, is_active: record.active, created_at: record.createdAt });
-    await supabase.from("worker_outsource_prices").upsert({
+    assertWrite(await supabase.from("workers").upsert({ id: record.id, worker_code: record.code, name: record.name, active: record.active, is_active: record.active, created_at: record.createdAt }));
+    assertWrite(await supabase.from("worker_outsource_prices").upsert({
       worker_id: record.id,
       manual_unit_price: next.workerOutsourcePrices.find((item) => item.workerId === record.id)?.manualUnitPrice ?? 40,
       smart_unit_price: next.workerOutsourcePrices.find((item) => item.workerId === record.id)?.smartUnitPrice ?? 20,
@@ -599,7 +603,7 @@ export async function upsertWorker(worker: Partial<Worker> & Pick<Worker, "name"
       office_work_unit_price: next.workerOutsourcePrices.find((item) => item.workerId === record.id)?.officeWorkUnitPrice ?? 300,
       created_at: record.createdAt,
       updated_at: record.createdAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -613,8 +617,8 @@ export async function deleteWorker(id: string, current: AppData) {
     workerShareLinks: current.workerShareLinks.map((item) => (item.workerId === id ? { ...item, active: false, updatedAt: nowIso() } : item))
   };
   if (supabase) {
-    await supabase.from("worker_share_links").update({ active: false, updated_at: nowIso() }).eq("worker_id", id);
-    await supabase.from("workers").update({ active: false }).eq("id", id);
+    assertWrite(await supabase.from("worker_share_links").update({ active: false, updated_at: nowIso() }).eq("worker_id", id));
+    assertWrite(await supabase.from("workers").update({ active: false }).eq("id", id));
   }
   saveLocal(next);
   return next;
@@ -633,8 +637,8 @@ export async function deleteWorkerPermanently(id: string, current: AppData) {
     workerOutsourcePrices: current.workerOutsourcePrices.filter((item) => item.workerId !== id)
   };
   if (supabase) {
-    await supabase.from("worker_outsource_prices").delete().eq("worker_id", id);
-    await supabase.from("workers").delete().eq("id", id);
+    assertWrite(await supabase.from("worker_outsource_prices").delete().eq("worker_id", id));
+    assertWrite(await supabase.from("workers").delete().eq("id", id));
   }
   saveLocal(next);
   return next;
@@ -652,13 +656,13 @@ export async function issueWorkerShareLink(workerId: string, current: AppData) {
   };
   const next = { ...current, workerShareLinks: [...current.workerShareLinks.filter((item) => item.workerId !== workerId), record] };
   if (supabase) {
-    await supabase.from("worker_share_links").upsert({
+    assertWrite(await supabase.from("worker_share_links").upsert({
       worker_id: record.workerId,
       token: record.token,
       active: record.active,
       created_at: record.createdAt,
       updated_at: record.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -671,13 +675,13 @@ export async function toggleWorkerShareLink(workerId: string, active: boolean, c
   const record = { ...existing, active, updatedAt: nowIso() };
   const next = { ...current, workerShareLinks: [...current.workerShareLinks.filter((item) => item.workerId !== workerId), record] };
   if (supabase) {
-    await supabase.from("worker_share_links").upsert({
+    assertWrite(await supabase.from("worker_share_links").upsert({
       worker_id: record.workerId,
       token: record.token,
       active: record.active,
       created_at: record.createdAt,
       updated_at: record.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -697,7 +701,7 @@ export async function upsertClient(client: Partial<Client> & Pick<Client, "name"
     createdAt: client.createdAt ?? nowIso()
   };
   const next = { ...current, clients: [...current.clients.filter((item) => item.id !== record.id), record] };
-  if (supabase) await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, closing_month: record.closingMonth, created_at: record.createdAt });
+  if (supabase) assertWrite(await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, closing_month: record.closingMonth, created_at: record.createdAt }));
   saveLocal(next);
   return next;
 }
@@ -705,7 +709,7 @@ export async function upsertClient(client: Partial<Client> & Pick<Client, "name"
 export async function deleteClient(id: string, current: AppData) {
   const supabase = supabaseClient();
   const next = { ...current, clients: current.clients.map((item) => (item.id === id ? { ...item, active: false } : item)) };
-  if (supabase) await supabase.from("clients").update({ active: false, is_active: false }).eq("id", id);
+  if (supabase) assertWrite(await supabase.from("clients").update({ active: false, is_active: false }).eq("id", id));
   saveLocal(next);
   return next;
 }
@@ -715,7 +719,7 @@ export async function deleteClientPermanently(id: string, current: AppData) {
   if (used) throw new Error("この顧問先は過去の作業履歴で使用されているため削除できません。無効化してください。");
   const supabase = supabaseClient();
   const next = { ...current, clients: current.clients.filter((item) => item.id !== id) };
-  if (supabase) await supabase.from("clients").delete().eq("id", id);
+  if (supabase) assertWrite(await supabase.from("clients").delete().eq("id", id));
   saveLocal(next);
   return next;
 }
@@ -753,7 +757,7 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
     unitPrices: [...current.unitPrices.filter((item) => item.workTypeId !== id), priceRecord]
   };
   if (supabase) {
-    await supabase.from("work_types").upsert({
+    assertWrite(await supabase.from("work_types").upsert({
       id: record.id,
       work_type_code: record.code,
       name: record.name,
@@ -762,8 +766,8 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
       active: record.active,
       is_active: record.active,
       created_at: record.createdAt
-    });
-    await supabase.from("unit_prices").upsert({
+    }));
+    assertWrite(await supabase.from("unit_prices").upsert({
       work_type_id: priceRecord.workTypeId,
       amount: priceRecord.amount,
       cost_amount: priceRecord.costAmount,
@@ -773,7 +777,7 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
       unit_label: priceRecord.unitLabel,
       created_at: priceRecord.createdAt,
       updated_at: priceRecord.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -782,7 +786,7 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
 export async function deleteWorkType(id: string, current: AppData) {
   const supabase = supabaseClient();
   const next = { ...current, workTypes: current.workTypes.map((item) => (item.id === id ? { ...item, active: false } : item)) };
-  if (supabase) await supabase.from("work_types").update({ active: false, is_active: false }).eq("id", id);
+  if (supabase) assertWrite(await supabase.from("work_types").update({ active: false, is_active: false }).eq("id", id));
   saveLocal(next);
   return next;
 }
@@ -797,8 +801,8 @@ export async function deleteWorkTypePermanently(id: string, current: AppData) {
     unitPrices: current.unitPrices.filter((item) => item.workTypeId !== id)
   };
   if (supabase) {
-    await supabase.from("unit_prices").delete().eq("work_type_id", id);
-    await supabase.from("work_types").delete().eq("id", id);
+    assertWrite(await supabase.from("unit_prices").delete().eq("work_type_id", id));
+    assertWrite(await supabase.from("work_types").delete().eq("id", id));
   }
   saveLocal(next);
   return next;
@@ -881,7 +885,7 @@ export async function recordFullBackup(targetMonth: string, fileName: string, cu
   };
   const supabase = supabaseClient();
   if (supabase) {
-    await supabase.from("backup_records").insert(fromBackupRecord(record));
+    assertWrite(await supabase.from("backup_records").insert(fromBackupRecord(record)));
   }
   const next = await insertAuditLog({ ...current, backupRecords: [record, ...current.backupRecords] }, {
     actionType: "backup_created",
@@ -1037,7 +1041,7 @@ export async function upsertReport(input: Partial<DailyReport> & ReportInput, cu
     ...current,
     reports: [...current.reports.filter((item) => item.id !== record.id), record].sort((a, b) => b.workDate.localeCompare(a.workDate))
   };
-  if (supabase) await supabase.from("daily_reports").upsert(fromReport(record));
+  if (supabase) assertWrite(await supabase.from("daily_reports").upsert(fromReport(record)));
   if (existing) {
     next = await recordWorkLogChange(next, {
       actionType: "update",
@@ -1061,7 +1065,7 @@ export async function deleteReport(id: string, current: AppData) {
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
   let next = { ...current, reports: current.reports.filter((item) => item.id !== id) };
-  if (supabase) await supabase.from("daily_reports").delete().eq("id", id);
+  if (supabase) assertWrite(await supabase.from("daily_reports").delete().eq("id", id));
   if (target) {
     next = await recordWorkLogChange(next, {
       actionType: "delete",
@@ -1104,7 +1108,7 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
     ...current,
     monthlyWorkReports: [...current.monthlyWorkReports.filter((item) => item.id !== record.id), record].sort((a, b) => b.workDate.localeCompare(a.workDate))
   };
-  if (supabase) await supabase.from("monthly_work_reports").upsert(fromMonthlyWorkReport(record));
+  if (supabase) assertWrite(await supabase.from("monthly_work_reports").upsert(fromMonthlyWorkReport(record)));
   if (existing) {
     next = await recordWorkLogChange(next, {
       actionType: "update",
@@ -1128,7 +1132,7 @@ export async function deleteMonthlyWorkReport(id: string, current: AppData) {
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
   let next = { ...current, monthlyWorkReports: current.monthlyWorkReports.filter((item) => item.id !== id) };
-  if (supabase) await supabase.from("monthly_work_reports").delete().eq("id", id);
+  if (supabase) assertWrite(await supabase.from("monthly_work_reports").delete().eq("id", id));
   if (target) {
     next = await recordWorkLogChange(next, {
       actionType: "delete",
@@ -1148,7 +1152,7 @@ export async function updateUnitPrice(price: UnitPrice, current: AppData) {
   const record = { ...price, updatedAt: nowIso() };
   const next = { ...current, unitPrices: current.unitPrices.map((item) => (item.workTypeId === record.workTypeId ? record : item)) };
   if (supabase) {
-    await supabase.from("unit_prices").upsert({
+    assertWrite(await supabase.from("unit_prices").upsert({
       work_type_id: record.workTypeId,
       amount: record.amount,
       cost_amount: record.costAmount,
@@ -1158,7 +1162,7 @@ export async function updateUnitPrice(price: UnitPrice, current: AppData) {
       unit_label: record.unitLabel,
       created_at: record.createdAt,
       updated_at: record.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -1169,7 +1173,7 @@ export async function updateSortingUnitPrice(price: SortingUnitPrice, current: A
   const record = { ...price, updatedAt: nowIso() };
   const next = { ...current, sortingUnitPrices: current.sortingUnitPrices.map((item) => (item.id === record.id ? record : item)) };
   if (supabase) {
-    await supabase.from("sorting_unit_prices").upsert({
+    assertWrite(await supabase.from("sorting_unit_prices").upsert({
       id: record.id,
       name: record.name,
       amount: record.amount,
@@ -1178,7 +1182,7 @@ export async function updateSortingUnitPrice(price: SortingUnitPrice, current: A
       unit_label: record.unitLabel,
       created_at: record.createdAt,
       updated_at: record.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -1192,7 +1196,7 @@ export async function updateWorkerOutsourcePrice(price: WorkerOutsourcePrice, cu
     workerOutsourcePrices: current.workerOutsourcePrices.map((item) => (item.workerId === record.workerId ? record : item))
   };
   if (supabase) {
-    await supabase.from("worker_outsource_prices").upsert({
+    assertWrite(await supabase.from("worker_outsource_prices").upsert({
       worker_id: record.workerId,
       manual_unit_price: record.manualUnitPrice,
       smart_unit_price: record.smartUnitPrice,
@@ -1200,7 +1204,7 @@ export async function updateWorkerOutsourcePrice(price: WorkerOutsourcePrice, cu
       office_work_unit_price: record.officeWorkUnitPrice,
       created_at: record.createdAt,
       updated_at: record.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;
@@ -1228,7 +1232,7 @@ export async function upsertWorkerWorkTypeOutsourcePrice(
     workerWorkTypeOutsourcePrices: [...current.workerWorkTypeOutsourcePrices.filter((item) => item.id !== record.id), record]
   };
   if (supabase) {
-    await supabase.from("worker_work_type_outsource_prices").upsert(fromWorkerWorkTypeOutsourcePrice(record), { onConflict: "worker_id,work_type_id" });
+    assertWrite(await supabase.from("worker_work_type_outsource_prices").upsert(fromWorkerWorkTypeOutsourcePrice(record), { onConflict: "worker_id,work_type_id" }));
   }
   saveLocal(next);
   return next;
@@ -1240,7 +1244,7 @@ export async function deleteWorkerWorkTypeOutsourcePrice(id: string, current: Ap
     ...current,
     workerWorkTypeOutsourcePrices: current.workerWorkTypeOutsourcePrices.filter((item) => item.id !== id)
   };
-  if (supabase) await supabase.from("worker_work_type_outsource_prices").delete().eq("id", id);
+  if (supabase) assertWrite(await supabase.from("worker_work_type_outsource_prices").delete().eq("id", id));
   saveLocal(next);
   return next;
 }
@@ -1250,7 +1254,7 @@ export async function updatePaymentStatementSettings(settings: PaymentStatementS
   const record = { ...settings, updatedAt: nowIso() };
   const next = { ...current, paymentStatementSettings: record };
   if (supabase) {
-    await supabase.from("payment_statement_settings").upsert({
+    assertWrite(await supabase.from("payment_statement_settings").upsert({
       id: "default",
       title: record.title,
       issuer_name: record.issuerName,
@@ -1263,7 +1267,7 @@ export async function updatePaymentStatementSettings(settings: PaymentStatementS
       notes: record.notes,
       footer_text: record.footerText,
       updated_at: record.updatedAt
-    });
+    }));
   }
   saveLocal(next);
   return next;

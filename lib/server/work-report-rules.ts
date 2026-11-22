@@ -140,6 +140,22 @@ export function isDuplicateMonthly(existing: MonthlyWorkReport[], workerId: stri
   );
 }
 
+// 異常値の確認基準（仮のデフォルト。拒否はせず、確認ダイアログを出すだけ）。
+export const ANOMALY_FACTOR = 5;
+export const ANOMALY_MIN_SAMPLES = 5;
+
+export function anomalyMessage(label: string) {
+  return `${label}がこれまでの実績よりかなり大きい値です。入力内容を確認してください。`;
+}
+
+export function isUnusuallyLarge(history: number[], value: number) {
+  const samples = history.filter((item) => item > 0).sort((a, b) => a - b);
+  if (samples.length < ANOMALY_MIN_SAMPLES || value <= 0) return false;
+  const middle = Math.floor(samples.length / 2);
+  const median = samples.length % 2 ? samples[middle] : (samples[middle - 1] + samples[middle]) / 2;
+  return value > median * ANOMALY_FACTOR;
+}
+
 export function buildSortingRecord(params: {
   id: string;
   input: SortingInput;

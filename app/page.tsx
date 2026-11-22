@@ -40,9 +40,8 @@ import {
   type BackupKind,
   type RecentLocalBackup
 } from "@/lib/backup";
+import { CLOSED_MONTH_MESSAGE, hasValidClosingBackup, isMonthClosed, latestClosingBackup } from "@/lib/storage";
 import {
-  createSampleData,
-  CLOSED_MONTH_MESSAGE,
   closeMonth,
   deleteClient,
   deleteClientPermanently,
@@ -53,10 +52,8 @@ import {
   deleteWorkType,
   deleteWorkTypePermanently,
   fetchData,
-  hasValidClosingBackup,
   issueWorkerShareLink,
-  isMonthClosed,
-  latestClosingBackup,
+  logout,
   recordFullBackup,
   reopenMonth,
   toggleWorkerShareLink,
@@ -71,7 +68,7 @@ import {
   upsertWorker,
   upsertWorkerWorkTypeOutsourcePrice,
   deleteWorkerWorkTypeOutsourcePrice
-} from "@/lib/storage";
+} from "@/lib/admin-api";
 import {
   calculateSortingCountState,
   emptySortingCountState,
@@ -967,18 +964,6 @@ export default function Home() {
     notify("支払明細書設定を保存しました。");
   }
 
-  async function createSamples() {
-    if (!window.confirm("サンプルデータを作成します。既存データは削除せず、不足しているサンプルだけ追加します。よろしいですか？")) return;
-    const next = await createSampleData(data);
-    setData(next);
-    setSortingForm(blankSorting(next));
-    setMonthlyForm(blankMonthly(next, workKind));
-    setPriceForms(Object.fromEntries(next.unitPrices.map((price) => [price.workTypeId, price])));
-    setSortingPriceForms(Object.fromEntries(next.sortingUnitPrices.map((price) => [price.id, price])));
-    setOutsourcePriceForms(Object.fromEntries(next.workerOutsourcePrices.map((price) => [price.workerId, price])));
-    notify("サンプルデータを作成しました。");
-  }
-
   function printPaymentStatement(workerRow: WorkerOutsourceSummaryRow) {
     const settings = data.paymentStatementSettings;
     const issueDate = new Date().toLocaleDateString("ja-JP");
@@ -1079,7 +1064,10 @@ export default function Home() {
               <p className="text-sm font-semibold text-brand">日報管理</p>
               <h1 className="text-2xl font-bold text-ink">仕訳作業・月次作業</h1>
             </div>
-            <span className="w-fit rounded-full border border-line bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-600">保存先: {mode === "supabase" ? "Supabase" : "ローカル"}</span>
+            <div className="flex items-center gap-2">
+              <span className="w-fit rounded-full border border-line bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-600">保存先: {mode === "supabase" ? "Supabase" : "ローカル"}</span>
+              <button className="button-secondary" type="button" onClick={logout}>ログアウト</button>
+            </div>
           </div>
           <nav className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
             <MainButton active={mainTab === "input"} onClick={() => setMainTab("input")} label="作業入力" />
