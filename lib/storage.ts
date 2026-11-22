@@ -48,7 +48,15 @@ function assertUniqueCode<T extends { id: string; code: string }>(items: T[], id
   }
 }
 
+let serverClient: SupabaseClient | null = null;
+
+// 管理者API（サーバー）から、同じ保存処理をサービスキーのクライアントで実行するための差し替え口。
+export function setServerSupabaseClient(client: SupabaseClient) {
+  serverClient = client;
+}
+
 function supabaseClient(): SupabaseClient | null {
+  if (serverClient) return serverClient;
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !anonKey) return null;
@@ -978,8 +986,9 @@ export async function upsertReport(input: Partial<DailyReport> & ReportInput, cu
   const supabase = supabaseClient();
   const existing = input.id ? current.reports.find((report) => report.id === input.id) : undefined;
   const workMonth = monthFromDate(input.workDate);
-  if (isMonthClosed(current, workMonth)) {
-    await recordBlockedClosedMonth(current, workMonth, CLOSED_MONTH_MESSAGE);
+  const blockedMonth = [workMonth, existing?.workMonth].find((target) => target && isMonthClosed(current, target));
+  if (blockedMonth) {
+    await recordBlockedClosedMonth(current, blockedMonth, CLOSED_MONTH_MESSAGE);
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
   const id = input.id ?? createId("report");
@@ -1071,8 +1080,9 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
   const supabase = supabaseClient();
   const existing = input.id ? current.monthlyWorkReports.find((report) => report.id === input.id) : undefined;
   const workMonth = monthFromDate(input.workDate);
-  if (isMonthClosed(current, workMonth)) {
-    await recordBlockedClosedMonth(current, workMonth, CLOSED_MONTH_MESSAGE);
+  const blockedMonth = [workMonth, existing?.workMonth].find((target) => target && isMonthClosed(current, target));
+  if (blockedMonth) {
+    await recordBlockedClosedMonth(current, blockedMonth, CLOSED_MONTH_MESSAGE);
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
   const record: MonthlyWorkReport = {
