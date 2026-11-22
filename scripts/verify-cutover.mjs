@@ -1,9 +1,10 @@
-// 切替後の確認スクリプト（読み取りと「0件を対象とする削除」だけを行い、データは変更しない）。
+// 切替後の確認スクリプト（GETリクエストのみを使用。データ変更リクエストを行わない）。
 // 秘密値・データ行は出力しない。結果は PASS / FAIL / WARN / SKIP のみ。
 //
 // 使い方（PowerShell 例）:
 //   $env:SUPABASE_URL="https://xxxx.supabase.co"; $env:SUPABASE_ANON_KEY="..."; $env:APP_URL="https://create-repository.vercel.app"
-//   $env:OLD_WORKER_TOKEN="（任意: 失効させた旧リンクのトークン）"; $env:CRON_SECRET="（任意）"
+//   $env:OLD_WORKER_TOKEN="（失効した旧リンクのトークン。旧リンクがなければ NO_OLD_WORKER_TOKENS=yes）"; $env:CRON_SECRET="（任意）"
+//   $env:DB_PERMISSIONS_VERIFIED="yes"  # verify.sql の全項目を手動照合した場合のみ
 //   node scripts/verify-cutover.mjs
 
 const TABLES = [
@@ -26,18 +27,10 @@ function report(status, label, detail = "") {
 async function checkTable(table, keyColumn) {
   const headers = { apikey: anonKey, Authorization: `Bearer ${anonKey}` };
   const select = await fetch(`${supabaseUrl}/rest/v1/${table}?select=${keyColumn}&limit=1`, { headers });
-  if (select.status === 401 || select.status === 403) {
-    report("PASS", `anon SELECT ${table} 拒否`, String(select.status));
-  } else if (select.ok) {
-    const rows = await select.json().catch(() => []);
-    report(Array.isArray(rows) && rows.length === 0 ? "WARN" : "FAIL", `anon SELECT ${table}`, `HTTP ${select.status}, ${Array.isArray(rows) ? rows.length : "?"}件取得`);
-  } else {
-    report("WARN", `anon SELECT ${table}`, `HTTP ${select.status}`);
-  }
+  // GETだけで権限を確認する。DELETE（0件想定でも）は一切送らない。
+  report(select.status === 401 || select.status === 403 ? "PASS" : "FAIL",
+    `anon SELECT ${table} 拒否`, `HTTP ${select.status}`);
 
-  // 存在しないIDを条件にした削除（許可されていても0件）。権限があるかどうかだけを確認する。
-  const remove = await fetch(`${supabaseUrl}/rest/v1/${table}?${keyColumn}=eq.__verify_cutover_nonexistent__`, { method: "DELETE", headers: { ...headers, Prefer: "return=minimal" } });
-  report(remove.status === 401 || remove.status === 403 ? "PASS" : "FAIL", `anon DELETE ${table} 拒否`, `HTTP ${remove.status}`);
 }
 
 async function checkApp() {
@@ -62,8 +55,10 @@ async function checkApp() {
   if (process.env.OLD_WORKER_TOKEN) {
     const old = await fetch(`${appUrl}/api/worker/${encodeURIComponent(process.env.OLD_WORKER_TOKEN)}`, { cache: "no-store" });
     report(old.status === 404 ? "PASS" : "FAIL", "旧外注者リンクを拒否", `HTTP ${old.status}`);
+  } else if (process.env.NO_OLD_WORKER_TOKENS === "yes") {
+    report("PASS", "旧外注者リンクの拒否", "既存リンクなしを別途確認済み");
   } else {
-    report("SKIP", "旧外注者リンクの拒否", "OLD_WORKER_TOKEN 未指定");
+    report("FAIL", "旧外注者リンクの拒否", "OLD_WORKER_TOKEN または NO_OLD_WORKER_TOKENS=yes が必要");
   }
 
   const cronHeaders = process.env.CRON_SECRET ? { Authorization: `Bearer ${process.env.CRON_SECRET}` } : {};
@@ -72,14 +67,15 @@ async function checkApp() {
 }
 
 if (!supabaseUrl || !anonKey) {
-  report("SKIP", "DB直接アクセスの確認", "SUPABASE_URL / SUPABASE_ANON_KEY 未指定");
+  report("FAIL", "DB直接アクセスの確認", "SUPABASE_URL / SUPABASE_ANON_KEY 未指定");
 } else {
   for (const [table, keyColumn] of TABLES) await checkTable(table, keyColumn);
 }
 if (!appUrl) {
-  report("SKIP", "アプリの確認", "APP_URL 未指定");
+  report("FAIL", "アプリの確認", "APP_URL 未指定");
 } else {
   await checkApp();
 }
-console.log(failed ? `\n不合格: ${failed}件` : "\n不合格なし");
+if (process.env.DB_PERMISSIONS_VERIFIED !== "yes") report("FAIL", "DBのINSERT/UPDATE/DELETE/TRUNCATE/RPC権限の確認", "SQL Editorのverify.sqlで別途確認し DB_PERMISSIONS_VERIFIED=yes を設定");
+console.log(failed ? `\n不合格: ${failed}件` : "\n全項目合格");
 process.exit(failed ? 1 : 0);
