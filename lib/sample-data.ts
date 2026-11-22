@@ -128,6 +128,7 @@ export const sampleData: AppData = {
     { id: "worker-c", code: "W003", name: "田中 美咲", active: true, createdAt: today }
   ]),
   workerWorkTypeOutsourcePrices: [],
+    clientWorkTypeBillingPrices: [],
   workerShareLinks: [],
   paymentStatementSettings: defaultPaymentStatementSettings,
   monthlyWorkReports: [

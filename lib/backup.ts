@@ -5,7 +5,7 @@ import {
 } from "./calculations";
 import type { AppData, DailyReport, MonthlyWorkReport } from "./types";
 
-export const BACKUP_SCHEMA_VERSION = "2";
+export const BACKUP_SCHEMA_VERSION = "3";
 const RECENT_BACKUP_KEY = "sorting-daily-report-recent-backups";
 const RECENT_BACKUP_LIMIT = 5;
 
@@ -73,6 +73,7 @@ export function createBackupPayload(data: AppData, kind: BackupKind) {
     sorting_unit_prices: data.sortingUnitPrices,
     worker_outsource_prices: data.workerOutsourcePrices,
     worker_work_type_outsource_prices: data.workerWorkTypeOutsourcePrices,
+    client_work_type_billing_prices: data.clientWorkTypeBillingPrices,
     worker_share_links: data.workerShareLinks,
     payment_statement_settings: data.paymentStatementSettings
   };

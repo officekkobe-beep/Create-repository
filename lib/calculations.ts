@@ -14,6 +14,7 @@ import type {
   WorkerOutsourceSummaryRow,
   WorkType
 } from "./types";
+import { billingAmount, billingUnitLabel, effectiveBillingPrice } from "./billing";
 
 export const FREE_MANUAL_ALLOWANCE = 30;
 
@@ -272,12 +273,19 @@ export function buildMonthlySummary(data: AppData, month: string) {
   };
 }
 
-export function calculateMonthlyWorkAmount(report: Pick<MonthlyWorkReport, "workTypeId" | "documentCount" | "workMinutes">, data: AppData) {
-  const price = data.unitPrices.find((item) => item.workTypeId === report.workTypeId);
+export function calculateMonthlyWorkAmount(
+  report: Pick<MonthlyWorkReport, "workTypeId" | "documentCount" | "workMinutes"> & Partial<Pick<MonthlyWorkReport, "billedUnitPrice" | "billedUnitQuantity" | "billedPriceSource">>,
+  data: AppData
+) {
   const workType = data.workTypes.find((item) => item.id === report.workTypeId);
-  if (!price || !workType) return 0;
+  const billing = effectiveBillingPrice(report, data);
+  if (!billing || !workType) return 0;
   const quantity = workType.unit === "count" ? report.documentCount : report.workMinutes;
-  return amountByUnit(quantity, unitQuantityFor(workType), price.amount);
+  if (billing.source === "standard" && billing.unitQuantity === unitQuantityFor(workType) && report.billedUnitPrice == null) {
+    // 単価の記録が無い旧データは、従来の計算式をそのまま使う。
+    return amountByUnit(quantity, billing.unitQuantity, billing.unitPrice);
+  }
+  return billingAmount(quantity, billing.unitQuantity, billing.unitPrice);
 }
 
 export function buildMonthlyWorkSummary(data: AppData, month: string) {
@@ -291,9 +299,14 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     const workType = workTypes.get(report.workTypeId);
     const price = prices.get(report.workTypeId);
     if (!workType || !price) return;
+    const billing = effectiveBillingPrice(report, data);
+    if (!billing) return;
 
-    const unitQuantity = unitQuantityFor(workType);
-    const key = `${report.clientId}-${report.workTypeId}`;
+    // 原価・外注費は従来どおり件数=1／時間=10分で計算する（売上単価の単位とは独立）。
+    const legacyUnitQuantity = unitQuantityFor(workType);
+    // 売上は「顧問先×作業種別×適用元×単価×単位」ごとにまとめる。単価の記録が無い旧データと
+    // 標準単価で記録された行は、単価・単位が同じなら同じ行に集計される（従来の集計結果を変えない）。
+    const key = `${report.clientId}-${report.workTypeId}-${billing.source}-${billing.unitPrice}-${billing.unitQuantity}`;
     const row =
       rowMap.get(key) ??
       {
@@ -305,11 +318,12 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
         unit: workType.unit,
         documentCount: 0,
         workMinutes: 0,
-        revenueUnitPrice: price.amount,
+        revenueUnitPrice: billing.unitPrice,
+        priceSource: billing.source,
         costUnitPrice: price.costAmount,
         outsourceUnitPrice: price.outsourceAmount,
-        unitQuantity,
-        unitLabel: unitPriceLabelFor(workType),
+        unitQuantity: billing.unitQuantity,
+        unitLabel: billingUnitLabel(workType.unit, billing.unitQuantity),
         revenue: 0,
         cost: 0,
         grossProfit: 0,
@@ -319,13 +333,14 @@ export function buildMonthlyWorkSummary(data: AppData, month: string) {
     row.documentCount += report.documentCount;
     row.workMinutes += report.workMinutes;
     const quantity = workType.unit === "count" ? row.documentCount : row.workMinutes;
-    row.revenue = amountByUnit(quantity, unitQuantity, price.amount);
-    row.cost = costByUnit(quantity, unitQuantity, price.costAmount);
+    const isLegacyFormula = billing.source === "standard" && billing.unitQuantity === legacyUnitQuantity;
+    row.revenue = isLegacyFormula ? amountByUnit(quantity, billing.unitQuantity, billing.unitPrice) : billingAmount(quantity, billing.unitQuantity, billing.unitPrice);
+    row.cost = costByUnit(quantity, legacyUnitQuantity, price.costAmount);
     // 外注費は担当者ごとに単価が異なりうるため、集計後の合計数量からまとめて計算せず、
     // 明細（レポート）単位で適用単価を解決してから積み上げる。
     const reportQuantity = workType.unit === "count" ? report.documentCount : report.workMinutes;
     const resolved = resolveMonthlyOutsourceUnitPrice(data, report.workerId, report.workTypeId, price.outsourceAmount);
-    row.outsourceCost += outsourceByUnit(reportQuantity, unitQuantity, resolved.unitPrice);
+    row.outsourceCost += outsourceByUnit(reportQuantity, legacyUnitQuantity, resolved.unitPrice);
     row.grossProfit = row.revenue - row.outsourceCost;
     rowMap.set(key, row);
   });

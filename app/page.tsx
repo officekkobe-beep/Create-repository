@@ -70,8 +70,22 @@ import {
   upsertReport,
   upsertWorker,
   upsertWorkerWorkTypeOutsourcePrice,
-  deleteWorkerWorkTypeOutsourcePrice
+  deleteWorkerWorkTypeOutsourcePrice,
+  isBillingSchemaReady,
+  upsertClientWorkTypeBillingPrice,
+  deleteClientWorkTypeBillingPrice
 } from "@/lib/storage";
+import {
+  ALLOWED_TIME_UNIT_MINUTES,
+  billingSourceLabel,
+  billingUnitLabel,
+  effectiveBillingPrice,
+  findClientBillingPrice,
+  planMonthlyBilling,
+  resolveBillingPrice,
+  standardBillingUnitQuantity,
+  type ResolvedBillingPrice
+} from "@/lib/billing";
 import {
   calculateSortingCountState,
   emptySortingCountState,
@@ -82,6 +96,7 @@ import {
   type SortingCountKey,
   type SortingCountState
 } from "@/lib/sorting-count";
+import { calculateMonthlyWorkAmount } from "@/lib/calculations";
 import { SupabaseConnectionProblemPanel } from "@/components/SupabaseConnectionProblemPanel";
 import { fiscalStartMonth, fiscalYearFromDate, fiscalYearOptions, normalizeClosingMonth } from "@/lib/fiscal-year";
 import type {
@@ -107,7 +122,7 @@ import type {
 type MainTab = "input" | "summary" | "closing" | "outsource" | "more";
 type MoreTab = "home" | "list" | "billing" | "backup" | "settings";
 type WorkKind = "sorting" | string;
-type SettingsTab = "clients" | "workers" | "workTypes" | "prices" | "paymentStatement";
+type SettingsTab = "clients" | "clientPrices" | "workers" | "workTypes" | "prices" | "paymentStatement";
 
 type BackupPreview = {
   fileName: string;
@@ -212,6 +227,7 @@ const emptyData: AppData = {
   sortingUnitPrices: [],
   workerOutsourcePrices: [],
   workerWorkTypeOutsourcePrices: [],
+    clientWorkTypeBillingPrices: [],
   workerShareLinks: [],
   paymentStatementSettings: emptySettings,
   monthlyWorkReports: [],
@@ -297,12 +313,17 @@ export default function Home() {
   const [closingNote, setClosingNote] = useState("");
   const [reopenReason, setReopenReason] = useState("");
   const [reopenConfirmText, setReopenConfirmText] = useState("");
+  // 今回限りの売上単価（管理画面のみ）。空欄なら顧問先別単価→標準単価を自動適用。
+  const [overridePriceText, setOverridePriceText] = useState("");
+  const [overrideReason, setOverrideReason] = useState("");
+  const [billingReady, setBillingReady] = useState(false);
 
   useEffect(() => {
     fetchData().then((result) => {
       setData(result.data);
       setMode(result.mode);
       setConnectionWarning(result.error ?? "");
+      setBillingReady(result.mode === "local" || isBillingSchemaReady());
       setSortingForm(blankSorting(result.data));
       setSortingCountState(emptySortingCountState());
       const firstWorkType = result.data.workTypes.find((workType) => workType.active)?.id ?? "sorting";
@@ -455,6 +476,8 @@ export default function Home() {
       return;
     }
     setMonthlyForm(blankMonthly(data, kind));
+    setOverridePriceText("");
+    setOverrideReason("");
   }
 
   function updateSortingCount(field: SortingCountKey, rawValue: string) {
@@ -536,6 +559,29 @@ export default function Home() {
     ];
   }
 
+  // 今回限りの単価の入力値。undefined=指定なし、null=解除、数値=指定。
+  function monthlyOverrideValue(): number | null | undefined {
+    const text = overridePriceText.trim();
+    if (text !== "") return Number(text);
+    if (editingMonthly?.billedPriceSource === "override") return null;
+    return undefined;
+  }
+
+  // 保存時と同じ関数（planMonthlyBilling）で、適用される売上単価を求める。
+  function plannedMonthlyBilling(report: Pick<MonthlyWorkReport, "clientId" | "workTypeId">, existing: MonthlyWorkReport | undefined) {
+    if (!billingReady) return { billedUnitPrice: existing?.billedUnitPrice ?? null, billedUnitQuantity: existing?.billedUnitQuantity ?? null, billedPriceSource: existing?.billedPriceSource ?? null, billingOverrideReason: existing?.billingOverrideReason ?? "" };
+    try {
+      return planMonthlyBilling({ clientId: report.clientId, workTypeId: report.workTypeId, overrideUnitPrice: monthlyOverrideValue(), overrideReason }, existing, data);
+    } catch {
+      return { billedUnitPrice: null, billedUnitQuantity: null, billedPriceSource: null, billingOverrideReason: "" };
+    }
+  }
+
+  function billingPriceText(workType: WorkType | undefined, billing: ResolvedBillingPrice | null) {
+    if (!workType || !billing) return "未設定";
+    return `${billingUnitLabel(workType.unit, billing.unitQuantity)}${formatNumber(billing.unitPrice)}円（${billingSourceLabel(billing.source)}）`;
+  }
+
   function monthlyPreviewRows() {
     const worker = data.workers.find((item) => item.id === monthlyForm.workerId);
     const client = data.clients.find((item) => item.id === monthlyForm.clientId);
@@ -544,9 +590,11 @@ export default function Home() {
     const quantity = workType?.unit === "time" ? monthlyForm.workMinutes : monthlyForm.documentCount;
     const unitQuantity = workType ? unitQuantityFor(workType) : 1;
     const resolvedOutsource = resolveMonthlyOutsourceUnitPrice(data, monthlyForm.workerId, monthlyForm.workTypeId, price.outsourceAmount);
-    const revenue = amountByUnit(quantity, unitQuantity, price.amount);
+    const planned = { ...monthlyForm, documentCount: workType?.unit === "count" ? monthlyForm.documentCount : 0, workMinutes: workType?.unit === "time" ? monthlyForm.workMinutes : 0, ...plannedMonthlyBilling(monthlyForm, undefined) };
+    const billing = effectiveBillingPrice(planned, data);
+    const revenue = calculateMonthlyWorkAmount(planned, data);
     const outsourceCost = outsourceByUnit(quantity, unitQuantity, resolvedOutsource.unitPrice);
-    return [
+    const rows: string[][] = [
       ["作業日", monthlyForm.workDate],
       ["顧問先", client?.name ?? "未設定"],
       ["担当者", worker ? `${worker.code} ${worker.name}` : "未設定"],
@@ -555,7 +603,7 @@ export default function Home() {
       ["作業種別名", workType?.name ?? "未設定"],
       ["単位", workType ? unitLabel(workType) : "未設定"],
       [workType?.unit === "time" ? "作業時間" : "数量", workType?.unit === "time" ? `${formatNumber(monthlyForm.workMinutes)}分` : `${formatNumber(monthlyForm.documentCount)}件`],
-      ["売上単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(price.amount)}円`],
+      ["売上単価", billingPriceText(workType, billing)],
       ["外注単価", `${workType ? unitPriceLabelFor(workType) : "1件あたり"}${formatNumber(resolvedOutsource.unitPrice)}円`],
       ["単価種別", resolvedOutsource.source === "worker" ? "担当者別単価" : "作業種別デフォルト単価"],
       ["売上金額", formatCurrency(revenue)],
@@ -563,6 +611,9 @@ export default function Home() {
       ["粗利", formatCurrency(revenue - outsourceCost)],
       ["メモ", displayMemo(monthlyForm.memo)]
     ];
+    if (planned.billedPriceSource === "override" && planned.billingOverrideReason) rows.splice(9, 0, ["今回限りの理由", planned.billingOverrideReason]);
+    if (client?.billingScopeMemo) rows.push(["包括契約メモ（確認用）", client.billingScopeMemo]);
+    return rows;
   }
 
   function sortingCompareFields(report: DailyReport) {
@@ -596,7 +647,7 @@ export default function Home() {
     const quantity = workType?.unit === "time" ? report.workMinutes : report.documentCount;
     const unitQuantity = workType ? unitQuantityFor(workType) : 1;
     const resolvedOutsource = resolveMonthlyOutsourceUnitPrice(data, report.workerId, report.workTypeId, price.outsourceAmount);
-    const revenue = amountByUnit(quantity, unitQuantity, price.amount);
+    const revenue = calculateMonthlyWorkAmount(report, data);
     const outsourceCost = outsourceByUnit(quantity, unitQuantity, resolvedOutsource.unitPrice);
     return {
       作業日: report.workDate,
@@ -604,6 +655,7 @@ export default function Home() {
       担当者: worker ? `${worker.code} ${worker.name}` : "未設定",
       作業種別: workType?.name ?? "未設定",
       数量: workType?.unit === "time" ? `${formatNumber(report.workMinutes)}分` : `${formatNumber(report.documentCount)}件`,
+      売上単価: billingPriceText(workType, effectiveBillingPrice(report, data)),
       売上金額: formatCurrency(revenue),
       外注費: formatCurrency(outsourceCost),
       粗利: formatCurrency(revenue - outsourceCost),
@@ -649,6 +701,7 @@ export default function Home() {
       workMinutes: workType?.unit === "time" ? monthlyForm.workMinutes : 0,
       memo: monthlyForm.memo
     };
+    Object.assign(after, plannedMonthlyBilling(after, editingMonthly));
     return buildBeforeAfterRows(monthlyCompareFields(editingMonthly), monthlyCompareFields(after));
   }
 
@@ -686,6 +739,15 @@ export default function Home() {
     if (!workType) return notify("作業種別を選択してください。");
     if (workType.unit === "count" && monthlyForm.documentCount <= 0) return notify("数量を入力してください。");
     if (workType.unit === "time" && monthlyForm.workMinutes <= 0) return notify("作業時間（分）を入力してください。");
+    if (billingReady) {
+      const override = monthlyOverrideValue();
+      if (typeof override === "number" && (!Number.isInteger(override) || override < 0)) return notify("今回限りの単価は0円以上の整数で入力してください（自動で決める場合は空欄）。");
+      try {
+        planMonthlyBilling({ clientId: monthlyForm.clientId, workTypeId: kind, overrideUnitPrice: override, overrideReason }, editingMonthly ?? undefined, data);
+      } catch (error) {
+        return notify(errorMessage(error));
+      }
+    }
     setConfirmKind("monthly");
   }
 
@@ -700,10 +762,14 @@ export default function Home() {
           workTypeId: kind,
           documentCount: workType.unit === "count" ? monthlyForm.documentCount : 0,
           workMinutes: workType.unit === "time" ? monthlyForm.workMinutes : 0,
-          id: editingMonthly?.id
+          id: editingMonthly?.id,
+          billingOverrideUnitPrice: billingReady ? monthlyOverrideValue() : undefined,
+          billingOverrideReason: overrideReason
         },
         data
       );
+      setOverridePriceText("");
+      setOverrideReason("");
       setData(next);
       refreshRecentBackups(next, editingMonthly ? next.monthlyWorkReports.find((report) => report.id === editingMonthly.id) : latestByUpdatedAt(next.monthlyWorkReports));
       setEditingMonthly(null);
@@ -730,6 +796,8 @@ export default function Home() {
     setWorkKind(report.workTypeId);
     setEditingMonthly(report);
     setMonthlyForm({ workDate: report.workDate, workerId: report.workerId, workTypeId: report.workTypeId, clientId: report.clientId, documentCount: report.documentCount, workMinutes: report.workMinutes, memo: report.memo });
+    setOverridePriceText(report.billedPriceSource === "override" && typeof report.billedUnitPrice === "number" ? String(report.billedUnitPrice) : "");
+    setOverrideReason(report.billedPriceSource === "override" ? report.billingOverrideReason ?? "" : "");
     setMainTab("input");
   }
 
@@ -1094,6 +1162,7 @@ export default function Home() {
       <div className="mx-auto max-w-7xl px-4 py-6">
         {message ? <div className="mb-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-800">{message}</div> : null}
         {connectionWarning ? <div className="mb-4"><SupabaseConnectionProblemPanel detail={connectionWarning} /></div> : null}
+        {!connectionWarning && mode === "supabase" && !billingReady ? <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">顧問先別単価の機能は、データベースの更新（1回だけ）を行うと使えるようになります。それまでは従来どおりの単価で動作します。</div> : null}
 
         {!connectionWarning && mainTab === "input" ? (
           <section className="panel p-5">
@@ -1127,6 +1196,7 @@ export default function Home() {
                 <SelectField label="顧問先" value={monthlyForm.clientId} onChange={(value) => setMonthlyForm({ ...monthlyForm, clientId: value })} options={data.clients.filter((item) => item.active).map((item) => ({ value: item.id, label: item.name }))} />
                 {selectedWorkType?.unit === "time" ? <NumberField label="作業時間（分）" value={monthlyForm.workMinutes} onChange={(value) => setMonthlyForm({ ...monthlyForm, workMinutes: value })} /> : <NumberField label="数量" value={monthlyForm.documentCount} onChange={(value) => setMonthlyForm({ ...monthlyForm, documentCount: value })} />}
                 <MemoField value={monthlyForm.memo} onChange={(value) => setMonthlyForm({ ...monthlyForm, memo: value })} />
+                {billingReady ? <MonthlyBillingFields data={data} form={monthlyForm} editing={editingMonthly} plan={plannedMonthlyBilling(monthlyForm, editingMonthly ?? undefined)} overridePriceText={overridePriceText} setOverridePriceText={setOverridePriceText} overrideReason={overrideReason} setOverrideReason={setOverrideReason} /> : null}
                 <SubmitRow label={editingMonthly ? "作業を更新" : "作業を保存"} />
               </form>
             )}
@@ -1201,6 +1271,9 @@ export default function Home() {
             {moreTab === "settings" ? (
               <SettingsPanel
                 settingsTab={settingsTab}
+                billingReady={billingReady}
+                setData={setData}
+                notify={notify}
                 setSettingsTab={setSettingsTab}
                 data={data}
                 clientForm={clientForm}
@@ -1553,7 +1626,7 @@ function SortingSummaryTable({ rows }: { rows: ReturnType<typeof buildMonthlySum
 
 function MonthlySummaryTable({ rows }: { rows: ReturnType<typeof buildMonthlyWorkSummary>["rows"] }) {
   if (!rows.length) return <Empty text="月次作業集計がありません。" />;
-  return <section className="panel overflow-hidden"><PanelTitle title="月次作業集計" /><div className="overflow-x-auto"><table className="w-full min-w-[880px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">作業区分</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{rows.map((row) => <tr key={row.key}><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell">{row.workTypeName}</td><td className="table-cell text-right">{row.unit === "count" ? `${formatNumber(row.documentCount)}件` : formatMinutes(row.workMinutes)}</td><td className="table-cell text-right">{formatCurrency(row.revenue)}</td><td className="table-cell text-right">{formatCurrency(row.outsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.grossProfit)}</td></tr>)}</tbody></table></div></section>;
+  return <section className="panel overflow-hidden"><PanelTitle title="月次作業集計" /><div className="overflow-x-auto"><table className="w-full min-w-[880px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3">作業区分</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3 text-right">売上単価</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{rows.map((row) => <tr key={row.key}><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell">{row.workTypeName}</td><td className="table-cell text-right">{row.unit === "count" ? `${formatNumber(row.documentCount)}件` : formatMinutes(row.workMinutes)}</td><td className="table-cell text-right">{row.unitLabel}{formatNumber(row.revenueUnitPrice)}円<span className="block text-xs text-slate-500">{billingSourceLabel(row.priceSource)}</span></td><td className="table-cell text-right">{formatCurrency(row.revenue)}</td><td className="table-cell text-right">{formatCurrency(row.outsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.grossProfit)}</td></tr>)}</tbody></table></div></section>;
 }
 
 function BillingPanel({ month, setMonth, rows, exportCsv }: { month: string; setMonth: (month: string) => void; rows: ReturnType<typeof buildClientProfitability>; exportCsv: () => void }) {
@@ -1562,7 +1635,7 @@ function BillingPanel({ month, setMonth, rows, exportCsv }: { month: string; set
 
 function BillingTable({ rows }: { rows: ReturnType<typeof buildClientProfitability> }) {
   if (!rows.length) return <Empty text="請求・採算データがありません。" />;
-  return <div className="space-y-4">{rows.map((row) => <section key={row.clientId} className="panel overflow-hidden"><PanelTitle title={row.clientName} description={`粗利: ${formatCurrency(row.grossProfit)} / 粗利率: ${formatPercent(row.grossProfitRate)}`} /><div className="overflow-x-auto"><table className="w-full min-w-[960px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">仕訳日報売上</th><th className="px-4 py-3 text-right">月次作業売上</th><th className="px-4 py-3 text-right">売上合計</th><th className="px-4 py-3 text-right">外注費合計</th><th className="px-4 py-3 text-right">粗利</th><th className="px-4 py-3 text-right">粗利率</th></tr></thead><tbody><tr><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell text-right">{formatCurrency(row.sortingRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.monthlyWorkRevenue)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.totalRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.totalOutsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.grossProfit)}</td><td className="table-cell text-right">{formatPercent(row.grossProfitRate)}</td></tr></tbody></table></div><div className="border-t border-line p-5"><h3 className="font-bold">仕訳作業外注費内訳</h3><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><Info label="手入力外注費" value={formatCurrency(row.manualOutsourceCost)} /><Info label="スマート取込外注費" value={formatCurrency(row.smartOutsourceCost)} /></div></div><div className="border-t border-line p-5"><h3 className="font-bold">作業種別別内訳（月次作業）</h3>{row.workTypeBreakdown.length ? <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[680px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業種別</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{row.workTypeBreakdown.map((item) => <tr key={item.key}><td className="table-cell font-semibold">{item.workTypeName}</td><td className="table-cell text-right">{item.unit === "count" ? `${formatNumber(item.documentCount)}件` : formatMinutes(item.workMinutes)}</td><td className="table-cell text-right">{formatCurrency(item.revenue)}</td><td className="table-cell text-right">{formatCurrency(item.outsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(item.grossProfit)}</td></tr>)}</tbody></table></div> : <p className="mt-2 text-sm text-slate-500">この月の月次作業はありません。</p>}</div>{row.sortingDetail ? <SortingDetail row={row.sortingDetail} /> : null}</section>)}</div>;
+  return <div className="space-y-4">{rows.map((row) => <section key={row.clientId} className="panel overflow-hidden"><PanelTitle title={row.clientName} description={`粗利: ${formatCurrency(row.grossProfit)} / 粗利率: ${formatPercent(row.grossProfitRate)}`} /><div className="overflow-x-auto"><table className="w-full min-w-[960px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">顧問先</th><th className="px-4 py-3 text-right">仕訳日報売上</th><th className="px-4 py-3 text-right">月次作業売上</th><th className="px-4 py-3 text-right">売上合計</th><th className="px-4 py-3 text-right">外注費合計</th><th className="px-4 py-3 text-right">粗利</th><th className="px-4 py-3 text-right">粗利率</th></tr></thead><tbody><tr><td className="table-cell font-semibold">{row.clientName}</td><td className="table-cell text-right">{formatCurrency(row.sortingRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.monthlyWorkRevenue)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.totalRevenue)}</td><td className="table-cell text-right">{formatCurrency(row.totalOutsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(row.grossProfit)}</td><td className="table-cell text-right">{formatPercent(row.grossProfitRate)}</td></tr></tbody></table></div><div className="border-t border-line p-5"><h3 className="font-bold">仕訳作業外注費内訳</h3><div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><Info label="手入力外注費" value={formatCurrency(row.manualOutsourceCost)} /><Info label="スマート取込外注費" value={formatCurrency(row.smartOutsourceCost)} /></div></div><div className="border-t border-line p-5"><h3 className="font-bold">作業種別別内訳（月次作業）</h3>{row.workTypeBreakdown.length ? <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[680px] border-collapse"><thead className="table-head"><tr><th className="px-4 py-3">作業種別</th><th className="px-4 py-3 text-right">数量</th><th className="px-4 py-3 text-right">売上</th><th className="px-4 py-3 text-right">外注費</th><th className="px-4 py-3 text-right">粗利</th></tr></thead><tbody>{row.workTypeBreakdown.map((item) => <tr key={item.key}><td className="table-cell font-semibold">{item.workTypeName}<span className="block text-xs font-normal text-slate-500">{item.unitLabel}{formatNumber(item.revenueUnitPrice)}円・{billingSourceLabel(item.priceSource)}</span></td><td className="table-cell text-right">{item.unit === "count" ? `${formatNumber(item.documentCount)}件` : formatMinutes(item.workMinutes)}</td><td className="table-cell text-right">{formatCurrency(item.revenue)}</td><td className="table-cell text-right">{formatCurrency(item.outsourceCost)}</td><td className="table-cell text-right font-bold text-brand">{formatCurrency(item.grossProfit)}</td></tr>)}</tbody></table></div> : <p className="mt-2 text-sm text-slate-500">この月の月次作業はありません。</p>}</div>{row.sortingDetail ? <SortingDetail row={row.sortingDetail} /> : null}</section>)}</div>;
 }
 
 function SortingDetail({ row }: { row: ReturnType<typeof buildMonthlySummary>["clientRows"][number] }) {
@@ -1577,6 +1650,9 @@ function OutsourcePaymentTable({ rows, selectedWorkerId, setSelectedWorkerId, on
 
 function SettingsPanel(props: {
   settingsTab: SettingsTab;
+  billingReady: boolean;
+  setData: (data: AppData) => void;
+  notify: (message: string) => void;
   setSettingsTab: (tab: SettingsTab) => void;
   data: AppData;
   clientForm: Partial<Client> & Pick<Client, "name">;
@@ -1621,6 +1697,7 @@ function SettingsPanel(props: {
       <div className="panel p-4">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <ChoiceButton active={props.settingsTab === "clients"} onClick={() => props.setSettingsTab("clients")} label="顧問先設定" />
+          <ChoiceButton active={props.settingsTab === "clientPrices"} onClick={() => props.setSettingsTab("clientPrices")} label="顧問先別単価" />
           <ChoiceButton active={props.settingsTab === "workers"} onClick={() => props.setSettingsTab("workers")} label="担当者設定" />
           <ChoiceButton active={props.settingsTab === "workTypes"} onClick={() => props.setSettingsTab("workTypes")} label="作業種別設定" />
           <ChoiceButton active={props.settingsTab === "prices"} onClick={() => props.setSettingsTab("prices")} label="単価設定" />
@@ -1628,6 +1705,7 @@ function SettingsPanel(props: {
         </div>
       </div>
       {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} deactivate={props.deactivateClient} deleteItem={props.deleteClient} /> : null}
+      {props.settingsTab === "clientPrices" ? <ClientBillingPriceSettings data={props.data} ready={props.billingReady} onChange={props.setData} notify={props.notify} /> : null}
       {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} deactivate={props.deactivateWorker} deleteItem={props.deleteWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}
       {props.settingsTab === "workTypes" ? <WorkTypeSettings data={props.data} submit={props.submitWorkType} deactivate={props.deactivateWorkType} deleteItem={props.deleteWorkType} /> : null}
       {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} submitWorkerWorkTypeOutsourcePrice={props.submitWorkerWorkTypeOutsourcePrice} removeWorkerWorkTypeOutsourcePrice={props.removeWorkerWorkTypeOutsourcePrice} /> : null}
@@ -1840,6 +1918,8 @@ function WorkTypeSettings({ data, submit, deactivate, deleteItem }: { data: AppD
   const [outsourcePrice, setOutsourcePrice] = useState(0);
   const unitQuantity = form.unit === "count" ? 1 : 10;
   const unitText = form.unit === "count" ? "1件あたり" : "10分あたり";
+  // 売上単価だけは時間単価の単位（10分・30分など）を選べる。外注単価は従来どおり10分単位。
+  const salesUnitText = billingUnitLabel(form.unit, standardBillingUnitQuantity(form));
   const editing = Boolean(form.id);
 
   useEffect(() => {
@@ -1880,7 +1960,7 @@ function WorkTypeSettings({ data, submit, deactivate, deleteItem }: { data: AppD
             <option value="count">件数</option>
             <option value="time">時間</option>
           </select>
-          <input className="field" type="number" min={0} required placeholder={`売上単価（${unitText}）`} value={salesPrice} onChange={(event) => setSalesPrice(Number(event.target.value))} />
+          <input className="field" type="number" min={0} required placeholder={`売上単価（${salesUnitText}）`} title={`売上単価（${salesUnitText}）`} value={salesPrice} onChange={(event) => setSalesPrice(Number(event.target.value))} />
           <input className="field" type="number" min={0} required placeholder={`外注単価（${unitText}）`} value={outsourcePrice} onChange={(event) => setOutsourcePrice(Number(event.target.value))} />
           <div className="flex gap-2">
             <button className="button-primary" type="submit">保存</button>
@@ -1890,12 +1970,21 @@ function WorkTypeSettings({ data, submit, deactivate, deleteItem }: { data: AppD
             <input type="checkbox" checked={form.active !== false} onChange={(event) => setForm({ ...form, active: event.target.checked })} />
             有効な作業種別として作業入力に表示する
           </label>
+          {form.unit === "time" ? (
+            <label className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-600 lg:col-span-6">
+              売上単価の単位
+              <select className="field max-w-[160px]" value={standardBillingUnitQuantity(form)} onChange={(event) => setForm({ ...form, billingUnitMinutes: Number(event.target.value) === 10 ? null : Number(event.target.value) })}>
+                {ALLOWED_TIME_UNIT_MINUTES.map((minutes) => <option key={minutes} value={minutes}>{billingUnitLabel("time", minutes)}</option>)}
+              </select>
+              <span className="text-xs font-normal text-slate-500">例：打合せ立ち会い 5,000円／30分。外注単価は従来どおり10分あたりです。保存済みの日報の金額は変わりません。</span>
+            </label>
+          ) : null}
         </form>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] border-collapse">
           <thead className="table-head"><tr><th className="px-4 py-3">コード</th><th className="px-4 py-3">作業種別</th><th className="px-4 py-3">単位</th><th className="px-4 py-3 text-right">売上単価</th><th className="px-4 py-3 text-right">外注単価</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
-          <tbody>{data.workTypes.map((workType) => { const price = data.unitPrices.find((item) => item.workTypeId === workType.id); const label = workType.unit === "count" ? "1件あたり" : "10分あたり"; return <tr key={workType.id} className={form.id === workType.id ? "bg-blue-50" : ""}><td className="table-cell font-semibold">{workType.code}</td><td className="table-cell font-semibold">{workType.name}</td><td className="table-cell">{unitLabel(workType)}</td><td className="table-cell text-right">{label}{formatNumber(price?.amount ?? 0)}円</td><td className="table-cell text-right">{label}{formatNumber(price?.outsourceAmount ?? 0)}円</td><td className="table-cell">{workType.active ? "有効" : "無効"}</td><td className="table-cell"><div className="flex justify-end gap-2"><button className="button-secondary" type="button" onClick={() => edit(workType)}>編集</button>{workType.active ? <button className="button-secondary" type="button" onClick={() => deactivate(workType.id)}>無効化</button> : null}<button className="button-danger" type="button" onClick={() => deleteItem(workType.id)}>削除</button></div></td></tr>; })}</tbody>
+          <tbody>{data.workTypes.map((workType) => { const price = data.unitPrices.find((item) => item.workTypeId === workType.id); const label = workType.unit === "count" ? "1件あたり" : "10分あたり"; return <tr key={workType.id} className={form.id === workType.id ? "bg-blue-50" : ""}><td className="table-cell font-semibold">{workType.code}</td><td className="table-cell font-semibold">{workType.name}</td><td className="table-cell">{unitLabel(workType)}</td><td className="table-cell text-right">{billingUnitLabel(workType.unit, standardBillingUnitQuantity(workType))}{formatNumber(price?.amount ?? 0)}円</td><td className="table-cell text-right">{label}{formatNumber(price?.outsourceAmount ?? 0)}円</td><td className="table-cell">{workType.active ? "有効" : "無効"}</td><td className="table-cell"><div className="flex justify-end gap-2"><button className="button-secondary" type="button" onClick={() => edit(workType)}>編集</button>{workType.active ? <button className="button-secondary" type="button" onClick={() => deactivate(workType.id)}>無効化</button> : null}<button className="button-danger" type="button" onClick={() => deleteItem(workType.id)}>削除</button></div></td></tr>; })}</tbody>
         </table>
       </div>
     </section>
@@ -2025,3 +2114,163 @@ function WorkerWorkTypeOutsourcePriceSettings({
 
 
 
+
+function MonthlyBillingFields({
+  data,
+  form,
+  editing,
+  plan,
+  overridePriceText,
+  setOverridePriceText,
+  overrideReason,
+  setOverrideReason
+}: {
+  data: AppData;
+  form: MonthlyWorkReportInput;
+  editing: MonthlyWorkReport | null;
+  plan: Pick<MonthlyWorkReport, "billedUnitPrice" | "billedUnitQuantity" | "billedPriceSource">;
+  overridePriceText: string;
+  setOverridePriceText: (value: string) => void;
+  overrideReason: string;
+  setOverrideReason: (value: string) => void;
+}) {
+  const workType = data.workTypes.find((item) => item.id === form.workTypeId);
+  const client = data.clients.find((item) => item.id === form.clientId);
+  const billing = typeof plan.billedUnitPrice === "number" ? { unitPrice: plan.billedUnitPrice, unitQuantity: plan.billedUnitQuantity ?? 1, source: plan.billedPriceSource ?? "standard" } : workType ? effectiveBillingPrice({ workTypeId: workType.id }, data) : null;
+  const base = resolveBillingPrice(data, form.clientId, form.workTypeId);
+  const keepsLegacy = Boolean(editing) && typeof plan.billedUnitPrice !== "number" && Boolean(billing);
+  return (
+    <div className="lg:col-span-2 rounded-lg border border-line bg-slate-50 p-4">
+      <div className="text-sm font-bold text-slate-700">売上単価（自動）</div>
+      <div className="mt-1 text-lg font-bold text-brand">
+        {workType && billing ? `${billingUnitLabel(workType.unit, billing.unitQuantity)}${formatNumber(billing.unitPrice)}円` : "単価が未設定です（作業種別設定または顧問先別単価を設定してください）"}
+        {billing ? <span className="ml-2 text-sm font-semibold text-slate-600">{billingSourceLabel(billing.source)}</span> : null}
+      </div>
+      {keepsLegacy ? <p className="mt-1 text-xs text-slate-500">この日報は単価の記録が無い以前のデータのため、従来どおり標準単価で計算しています。</p> : null}
+      {client?.billingScopeMemo ? <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">包括契約メモ：{client.billingScopeMemo}</p> : null}
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <label>
+          <span className="label mb-1 block">今回限りの単価（この日報だけ。空欄なら自動）</span>
+          <input className="field" type="number" min="0" step="1" inputMode="numeric" placeholder={base ? `通常 ${formatNumber(base.unitPrice)}円` : "未設定"} value={overridePriceText} onChange={(event) => setOverridePriceText(event.target.value)} />
+          {workType ? <span className="mt-1 block text-xs text-slate-500">単位は通常の単価と同じ（{billingUnitLabel(workType.unit, base?.unitQuantity ?? standardBillingUnitQuantity(workType))}）。顧問先別単価の設定は変わりません。</span> : null}
+        </label>
+        <label>
+          <span className="label mb-1 block">今回限りにする理由（任意）</span>
+          <input className="field" value={overrideReason} disabled={overridePriceText.trim() === ""} onChange={(event) => setOverrideReason(event.target.value)} />
+        </label>
+      </div>
+    </div>
+  );
+}
+
+function ClientBillingPriceSettings({ data, ready, onChange, notify }: { data: AppData; ready: boolean; onChange: (data: AppData) => void; notify: (message: string) => void }) {
+  const clientsSorted = data.clients.slice().sort((a, b) => Number(b.active) - Number(a.active) || a.code.localeCompare(b.code, "ja"));
+  const [clientId, setClientId] = useState(clientsSorted[0]?.id ?? "");
+  const client = data.clients.find((item) => item.id === clientId);
+  const [memo, setMemo] = useState(client?.billingScopeMemo ?? "");
+  const [drafts, setDrafts] = useState<Record<string, { price: string; minutes: number }>>({});
+  const workTypes = data.workTypes.filter((workType) => workType.active || data.clientWorkTypeBillingPrices.some((item) => item.clientId === clientId && item.workTypeId === workType.id));
+
+  useEffect(() => {
+    if (!clientId && clientsSorted[0]) setClientId(clientsSorted[0].id);
+  }, [clientId, clientsSorted]);
+
+  useEffect(() => {
+    setMemo(data.clients.find((item) => item.id === clientId)?.billingScopeMemo ?? "");
+    setDrafts({});
+  }, [clientId, data.clients]);
+
+  function draftFor(workType: WorkType) {
+    const saved = findClientBillingPrice(data, clientId, workType.id);
+    return drafts[workType.id] ?? { price: saved ? String(saved.unitPrice) : "", minutes: saved?.unitMinutes ?? standardBillingUnitQuantity(workType) };
+  }
+
+  async function save(workType: WorkType) {
+    const draft = draftFor(workType);
+    if (draft.price.trim() === "") return notify("顧問先別単価を入力してください（標準単価に戻す場合は「解除」）。");
+    const unitPrice = Number(draft.price);
+    if (!Number.isInteger(unitPrice) || unitPrice < 0) return notify("単価は0円以上の整数で入力してください。");
+    try {
+      const next = await upsertClientWorkTypeBillingPrice({ clientId, workTypeId: workType.id, unitPrice, unitMinutes: workType.unit === "time" ? draft.minutes : null }, data);
+      onChange(next);
+      setDrafts((current) => { const copy = { ...current }; delete copy[workType.id]; return copy; });
+      notify(`${client?.name ?? ""}の「${workType.name}」の単価を保存しました。今後の入力から自動で使われます（保存済みの日報は変わりません）。`);
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function remove(workType: WorkType) {
+    const saved = findClientBillingPrice(data, clientId, workType.id);
+    if (!saved) return;
+    try {
+      const next = await deleteClientWorkTypeBillingPrice(saved.id, data);
+      onChange(next);
+      setDrafts((current) => { const copy = { ...current }; delete copy[workType.id]; return copy; });
+      notify(`「${workType.name}」を標準単価に戻しました（保存済みの日報は変わりません）。`);
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  async function saveMemo(event: FormEvent) {
+    event.preventDefault();
+    if (!client) return;
+    try {
+      const next = await upsertClient({ ...client, billingScopeMemo: memo }, data);
+      onChange(next);
+      notify("包括契約メモを保存しました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
+  }
+
+  if (!ready) {
+    return <section className="panel p-5"><h2 className="text-xl font-bold">顧問先別単価</h2><p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">この機能は、データベースの更新（1回だけ）を行うと使えるようになります。</p></section>;
+  }
+
+  return (
+    <section className="panel overflow-hidden">
+      <PanelTitle title="顧問先別単価" description="顧問先ごとの実際の請求単価を登録します。登録すると、作業入力で顧問先と作業種別を選ぶだけで自動的に使われます。空欄（未設定）なら作業種別の標準単価を使います。0円も登録できます。" />
+      <div className="grid gap-4 border-b border-line p-5 lg:grid-cols-[320px_1fr]">
+        <SelectField label="顧問先" value={clientId} onChange={setClientId} options={clientsSorted.map((item) => ({ value: item.id, label: `${item.code} ${item.name}${item.active ? "" : "（無効）"}` }))} />
+        <form onSubmit={saveMemo}>
+          <span className="label mb-1 block">包括契約メモ（任意・作業入力の確認画面に表示）</span>
+          <div className="flex gap-2">
+            <input className="field" placeholder="例：役員会議支援には出席・準備・通常の資料作成を含む" value={memo} onChange={(event) => setMemo(event.target.value)} />
+            <button className="button-secondary" type="submit">保存</button>
+          </div>
+        </form>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[860px] border-collapse">
+          <thead className="table-head"><tr><th className="px-4 py-3">作業種別</th><th className="px-4 py-3 text-right">標準単価</th><th className="px-4 py-3">この顧問先の単価</th><th className="px-4 py-3">単位</th><th className="px-4 py-3">状態</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+          <tbody>
+            {workTypes.map((workType) => {
+              const standard = data.unitPrices.find((item) => item.workTypeId === workType.id);
+              const saved = findClientBillingPrice(data, clientId, workType.id);
+              const draft = draftFor(workType);
+              return (
+                <tr key={workType.id}>
+                  <td className="table-cell font-semibold">{workType.code} {workType.name}</td>
+                  <td className="table-cell text-right">{standard ? `${billingUnitLabel(workType.unit, standardBillingUnitQuantity(workType))}${formatNumber(standard.amount)}円` : "未設定"}</td>
+                  <td className="table-cell"><input className="field max-w-[160px]" type="number" min="0" step="1" inputMode="numeric" placeholder="未設定" value={draft.price} onChange={(event) => setDrafts({ ...drafts, [workType.id]: { ...draft, price: event.target.value } })} /></td>
+                  <td className="table-cell">
+                    {workType.unit === "time" ? (
+                      <select className="field max-w-[140px]" value={draft.minutes} onChange={(event) => setDrafts({ ...drafts, [workType.id]: { ...draft, minutes: Number(event.target.value) } })}>
+                        {ALLOWED_TIME_UNIT_MINUTES.map((minutes) => <option key={minutes} value={minutes}>{billingUnitLabel("time", minutes)}</option>)}
+                      </select>
+                    ) : "1件あたり"}
+                  </td>
+                  <td className="table-cell text-sm">{saved ? <span className="font-semibold text-brand">顧問先別単価</span> : <span className="text-slate-500">標準単価を使用</span>}</td>
+                  <td className="table-cell"><div className="flex justify-end gap-2"><button className="button-primary" type="button" onClick={() => save(workType)}>保存</button>{saved ? <button className="button-secondary" type="button" onClick={() => remove(workType)}>解除</button> : null}</div></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <p className="border-t border-line px-5 py-3 text-xs text-slate-500">単価を変えても、すでに保存した作業日報の金額は変わりません（保存時の単価で記録されます）。特定の1件だけ単価を変える場合は、作業入力の「今回限りの単価」を使ってください。</p>
+    </section>
+  );
+}

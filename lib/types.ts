@@ -22,6 +22,8 @@ export type Client = {
   code: string;
   active: boolean;
   closingMonth: number;
+  // 包括契約の範囲など、請求時に注意すべき内容のメモ（任意）。管理画面の保存前確認に表示する。
+  billingScopeMemo?: string;
   createdAt: string;
 };
 
@@ -54,8 +56,25 @@ export type WorkType = {
   code: string;
   name: string;
   unit: WorkUnit;
+  // 時間単価の売上単価の単位（分）。未設定は既存どおり10分。件数単価では使わない。
+  billingUnitMinutes?: number | null;
   active: boolean;
   createdAt: string;
+};
+
+export type BillingPriceSource = "standard" | "client" | "override";
+
+// 顧問先×作業種別の個別の売上単価。行が無い＝未設定（標準単価を使う）。0円は有効な単価。
+export type ClientWorkTypeBillingPrice = {
+  id: string;
+  clientId: string;
+  workTypeId: string;
+  unitPrice: number;
+  // 時間単価の単位（分）。件数単価ではnull。
+  unitMinutes: number | null;
+  note: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type UnitPrice = {
@@ -130,6 +149,11 @@ export type MonthlyWorkReport = {
   memo: string;
   source: ReportSource;
   sourceWorkerId: string;
+  // 保存時に記録した売上単価（スナップショット）。旧データはnull（従来の計算を使う）。
+  billedUnitPrice?: number | null;
+  billedUnitQuantity?: number | null;
+  billedPriceSource?: BillingPriceSource | null;
+  billingOverrideReason?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -143,6 +167,7 @@ export type AppData = {
   sortingUnitPrices: SortingUnitPrice[];
   workerOutsourcePrices: WorkerOutsourcePrice[];
   workerWorkTypeOutsourcePrices: WorkerWorkTypeOutsourcePrice[];
+  clientWorkTypeBillingPrices: ClientWorkTypeBillingPrice[];
   workerShareLinks: WorkerShareLink[];
   paymentStatementSettings: PaymentStatementSettings;
   monthlyWorkReports: MonthlyWorkReport[];
@@ -199,7 +224,15 @@ export type ReportInput = Omit<
 > &
   Partial<Pick<DailyReport, "source" | "sourceWorkerId">>;
 
-export type MonthlyWorkReportInput = Omit<MonthlyWorkReport, "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt"> & Partial<Pick<MonthlyWorkReport, "source" | "sourceWorkerId">>;
+export type MonthlyWorkReportInput = Omit<
+  MonthlyWorkReport,
+  "id" | "workMonth" | "source" | "sourceWorkerId" | "createdAt" | "updatedAt" | "billedUnitPrice" | "billedUnitQuantity" | "billedPriceSource" | "billingOverrideReason"
+> &
+  Partial<Pick<MonthlyWorkReport, "source" | "sourceWorkerId">> & {
+    // 管理画面からのみ指定する今回限りの単価。undefined=指定なし、null=解除。
+    billingOverrideUnitPrice?: number | null;
+    billingOverrideReason?: string;
+  };
 
 export type SummaryRow = {
   key: string;
@@ -256,6 +289,7 @@ export type MonthlyWorkSummaryRow = {
   documentCount: number;
   workMinutes: number;
   revenueUnitPrice: number;
+  priceSource: BillingPriceSource;
   costUnitPrice: number;
   outsourceUnitPrice: number;
   unitQuantity: number;
