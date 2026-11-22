@@ -291,6 +291,7 @@ export default function Home() {
   const [connectionWarning, setConnectionWarning] = useState("");
   const [confirmKind, setConfirmKind] = useState<ConfirmKind>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ kind: "sorting" | "monthly"; id: string } | null>(null);
+  const [issuedShareUrls, setIssuedShareUrls] = useState<Record<string, string>>({});
   const [closingNote, setClosingNote] = useState("");
   const [reopenReason, setReopenReason] = useState("");
   const [reopenConfirmText, setReopenConfirmText] = useState("");
@@ -824,19 +825,29 @@ export default function Home() {
   }
 
   async function issueShareLink(workerId: string) {
-    const next = await issueWorkerShareLink(workerId, data);
-    setData(next);
-    notify("共有リンクを発行しました。");
+    const existing = data.workerShareLinks.find((item) => item.workerId === workerId);
+    if (existing && !window.confirm("新しい共有リンクを発行します。今までのリンクは使えなくなります。よろしいですか？")) return;
+    try {
+      const result = await issueWorkerShareLink(workerId, data);
+      setData(result.data);
+      setIssuedShareUrls((current) => ({ ...current, [workerId]: `${window.location.origin}/worker/${result.token}` }));
+      notify("共有リンクを発行しました。この画面でコピーして担当者へ送ってください。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
   }
 
   async function toggleShareLink(workerId: string, active: boolean) {
-    const next = await toggleWorkerShareLink(workerId, active, data);
-    setData(next);
-    notify(active ? "共有リンクを有効にしました。" : "共有リンクを無効にしました。");
+    try {
+      const next = await toggleWorkerShareLink(workerId, active, data);
+      setData(next);
+      notify(active ? "共有リンクを有効にしました。" : "共有リンクを無効にしました。");
+    } catch (error) {
+      notify(errorMessage(error));
+    }
   }
 
-  async function copyShareLink(token: string) {
-    const url = `${window.location.origin}/worker/${token}`;
+  async function copyShareLink(url: string) {
     await navigator.clipboard.writeText(url);
     notify("共有リンクをコピーしました。");
   }
@@ -1204,6 +1215,7 @@ export default function Home() {
                 issueShareLink={issueShareLink}
                 toggleShareLink={toggleShareLink}
                 copyShareLink={copyShareLink}
+                issuedShareUrls={issuedShareUrls}
                 priceForms={priceForms}
                 sortingPriceForms={sortingPriceForms}
                 outsourcePriceForms={outsourcePriceForms}
@@ -1579,7 +1591,8 @@ function SettingsPanel(props: {
   deleteWorker: (id: string) => void;
   issueShareLink: (workerId: string) => void;
   toggleShareLink: (workerId: string, active: boolean) => void;
-  copyShareLink: (token: string) => void;
+  copyShareLink: (url: string) => void;
+  issuedShareUrls: Record<string, string>;
   priceForms: Record<string, UnitPrice>;
   sortingPriceForms: Record<string, SortingUnitPrice>;
   outsourcePriceForms: Record<string, WorkerOutsourcePrice>;
@@ -1616,7 +1629,7 @@ function SettingsPanel(props: {
         </div>
       </div>
       {props.settingsTab === "clients" ? <ClientSettings data={props.data} form={props.clientForm} setForm={props.setClientForm} submit={props.submitClient} deactivate={props.deactivateClient} deleteItem={props.deleteClient} /> : null}
-      {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} deactivate={props.deactivateWorker} deleteItem={props.deleteWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} /> : null}
+      {props.settingsTab === "workers" ? <WorkerSettings data={props.data} form={props.workerForm} setForm={props.setWorkerForm} submit={props.submitWorker} deactivate={props.deactivateWorker} deleteItem={props.deleteWorker} issueShareLink={props.issueShareLink} toggleShareLink={props.toggleShareLink} copyShareLink={props.copyShareLink} issuedShareUrls={props.issuedShareUrls} /> : null}
       {props.settingsTab === "workTypes" ? <WorkTypeSettings data={props.data} submit={props.submitWorkType} deactivate={props.deactivateWorkType} deleteItem={props.deleteWorkType} /> : null}
       {props.settingsTab === "prices" ? <PriceSettings data={props.data} priceForms={props.priceForms} sortingPriceForms={props.sortingPriceForms} outsourcePriceForms={props.outsourcePriceForms} setPriceForms={props.setPriceForms} setSortingPriceForms={props.setSortingPriceForms} setOutsourcePriceForms={props.setOutsourcePriceForms} submitPrice={props.submitPrice} submitSortingPrice={props.submitSortingPrice} submitOutsourcePrice={props.submitOutsourcePrice} submitWorkerWorkTypeOutsourcePrice={props.submitWorkerWorkTypeOutsourcePrice} removeWorkerWorkTypeOutsourcePrice={props.removeWorkerWorkTypeOutsourcePrice} /> : null}
       {props.settingsTab === "paymentStatement" ? <PaymentStatementSettingsPanel form={props.paymentSettingsForm} setForm={props.setPaymentSettingsForm} submit={props.submitPaymentSettings} /> : null}
@@ -1756,7 +1769,8 @@ function WorkerSettings({
   deleteItem,
   issueShareLink,
   toggleShareLink,
-  copyShareLink
+  copyShareLink,
+  issuedShareUrls
 }: {
   data: AppData;
   form: Partial<Worker> & Pick<Worker, "name">;
@@ -1766,7 +1780,8 @@ function WorkerSettings({
   deleteItem: (id: string) => void;
   issueShareLink: (workerId: string) => void;
   toggleShareLink: (workerId: string, active: boolean) => void;
-  copyShareLink: (token: string) => void;
+  copyShareLink: (url: string) => void;
+  issuedShareUrls: Record<string, string>;
 }) {
   const editing = Boolean(form.id);
   return (
@@ -1790,7 +1805,7 @@ function WorkerSettings({
       <div className="divide-y divide-line">
         {data.workers.map((worker) => {
           const link = data.workerShareLinks.find((item) => item.workerId === worker.id);
-          const url = link ? `/worker/${link.token}` : "";
+          const issuedUrl = issuedShareUrls[worker.id];
           return (
             <div key={worker.id} className={`grid gap-3 p-5 lg:grid-cols-[220px_1fr_auto] lg:items-center ${form.id === worker.id ? "bg-blue-50" : ""}`}>
               <div>
@@ -1800,8 +1815,16 @@ function WorkerSettings({
               <div>
                 {link ? (
                   <>
-                    <div className="break-all rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">{url}</div>
-                    <div className={`mt-1 text-xs font-semibold ${link.active ? "text-blue-700" : "text-slate-500"}`}>共有リンク: {link.active ? "有効" : "無効"}</div>
+                    {issuedUrl ? (
+                      <div className="break-all rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">{issuedUrl}<div className="mt-1 font-semibold">このURLは今だけ表示されます。コピーして担当者へ送ってください。</div></div>
+                    ) : link.issuedAt ? (
+                      <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">発行日時: {new Date(link.issuedAt).toLocaleString("ja-JP")}（URLは発行時のみ表示）</div>
+                    ) : (
+                      <div className="rounded-md bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">旧方式のリンクです。共有リンクを発行し直してください。</div>
+                    )}
+                    <div className={`mt-1 text-xs font-semibold ${link.active ? "text-blue-700" : "text-slate-500"}`}>
+                      共有リンク: {link.active ? "有効" : "無効"} ／ 受領確認: {link.firstUsedAt ? `確認済み（${new Date(link.firstUsedAt).toLocaleString("ja-JP")} 初回利用）` : "未使用"}
+                    </div>
                   </>
                 ) : (
                   <div className="text-sm text-slate-500">共有リンクは未発行です。</div>
@@ -1810,7 +1833,7 @@ function WorkerSettings({
               <div className="flex flex-wrap gap-2">
                 <button className="button-secondary" type="button" onClick={() => setForm(worker)}>編集</button>
                 <button className="button-secondary" type="button" onClick={() => issueShareLink(worker.id)}>共有リンク発行</button>
-                {link ? <button className="button-secondary" type="button" onClick={() => copyShareLink(link.token)}>コピー</button> : null}
+                {issuedUrl ? <button className="button-primary" type="button" onClick={() => copyShareLink(issuedUrl)}>コピー</button> : null}
                 {link ? <button className={link.active ? "button-danger" : "button-secondary"} type="button" onClick={() => toggleShareLink(worker.id, !link.active)}>{link.active ? "無効化" : "有効化"}</button> : null}
                 {worker.active ? <button className="button-secondary" type="button" onClick={() => deactivate(worker.id)}>無効化</button> : null}
                 <button className="button-danger" type="button" onClick={() => deleteItem(worker.id)}>削除</button>

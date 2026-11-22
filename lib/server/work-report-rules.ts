@@ -140,6 +140,14 @@ export function isDuplicateMonthly(existing: MonthlyWorkReport[], workerId: stri
   );
 }
 
+// 画面が送る送信ID。同じIDの再送は同じ日報IDになり、DBの一意制約で二重登録を防ぐ。
+export function reportIdFor(prefix: string, requestId: unknown, fallback: () => string) {
+  if (typeof requestId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestId)) {
+    return `${prefix}-${requestId.toLowerCase()}`;
+  }
+  return `${prefix}-${fallback()}`;
+}
+
 // 異常値の確認基準（仮のデフォルト。拒否はせず、確認ダイアログを出すだけ）。
 export const ANOMALY_FACTOR = 5;
 export const ANOMALY_MIN_SAMPLES = 5;

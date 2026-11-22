@@ -10,7 +10,6 @@ import {
   deleteWorkerWorkTypeOutsourcePrice,
   deleteWorkType,
   deleteWorkTypePermanently,
-  issueWorkerShareLink,
   recordFullBackup,
   reopenMonth,
   toggleWorkerShareLink,
@@ -112,7 +111,6 @@ const handlers: Record<string, Handler> = {
   "worker.upsert": (args, current) => upsertWorker(object(args.worker, "担当者"), current),
   "worker.deactivate": (args, current) => deleteWorker(string(args.id, "担当者ID"), current),
   "worker.deletePermanently": (args, current) => deleteWorkerPermanently(string(args.id, "担当者ID"), current),
-  "workerShareLink.issue": (args, current) => issueWorkerShareLink(string(args.workerId, "担当者ID"), current),
   "workerShareLink.toggle": (args, current) => toggleWorkerShareLink(string(args.workerId, "担当者ID"), boolean(args.active, "有効状態"), current),
 
   "client.upsert": (args, current) => upsertClient(object(args.client, "顧問先"), current),

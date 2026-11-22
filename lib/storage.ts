@@ -14,10 +14,6 @@ function createId(prefix: string) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
-function createToken() {
-  return crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-}
-
 function nextCode(prefix: string, existingCodes: string[]) {
   const max = existingCodes.reduce((value, code) => {
     const match = code.match(new RegExp(`^${prefix}(\\d+)$`));
@@ -49,7 +45,9 @@ function assertUniqueCode<T extends { id: string; code: string }>(items: T[], id
 }
 
 function assertWrite(result: { error: { message: string } | null }) {
-  if (result.error) throw new Error(`データの保存に失敗しました: ${result.error.message}`);
+  if (!result.error) return;
+  if (result.error.message.includes("月次確定済み")) throw new Error(CLOSED_MONTH_MESSAGE);
+  throw new Error(`データの保存に失敗しました: ${result.error.message}`);
 }
 
 let serverClient: SupabaseClient | null = null;
@@ -537,8 +535,10 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
       workerWorkTypeOutsourcePrices: workerWorkTypeOutsourcePricesResult.error ? [] : (workerWorkTypeOutsourcePricesResult.data ?? []).map(toWorkerWorkTypeOutsourcePrice),
       workerShareLinks: (workerShareLinksResult.data ?? []).map((row) => ({
         workerId: row.worker_id,
-        token: row.token,
+        token: row.token ?? "",
         active: row.active,
+        issuedAt: row.issued_at ?? "",
+        firstUsedAt: row.first_used_at ?? "",
         createdAt: row.created_at,
         updatedAt: row.updated_at
       })),
@@ -644,45 +644,13 @@ export async function deleteWorkerPermanently(id: string, current: AppData) {
   return next;
 }
 
-export async function issueWorkerShareLink(workerId: string, current: AppData) {
-  const supabase = supabaseClient();
-  const existing = current.workerShareLinks.find((item) => item.workerId === workerId);
-  const record: WorkerShareLink = {
-    workerId,
-    token: existing?.token ?? createToken(),
-    active: true,
-    createdAt: existing?.createdAt ?? nowIso(),
-    updatedAt: nowIso()
-  };
-  const next = { ...current, workerShareLinks: [...current.workerShareLinks.filter((item) => item.workerId !== workerId), record] };
-  if (supabase) {
-    assertWrite(await supabase.from("worker_share_links").upsert({
-      worker_id: record.workerId,
-      token: record.token,
-      active: record.active,
-      created_at: record.createdAt,
-      updated_at: record.updatedAt
-    }));
-  }
-  saveLocal(next);
-  return next;
-}
-
 export async function toggleWorkerShareLink(workerId: string, active: boolean, current: AppData) {
   const existing = current.workerShareLinks.find((item) => item.workerId === workerId);
-  if (!existing) return issueWorkerShareLink(workerId, current);
+  if (!existing) throw new Error("共有リンクが未発行です。先に共有リンクを発行してください。");
   const supabase = supabaseClient();
   const record = { ...existing, active, updatedAt: nowIso() };
   const next = { ...current, workerShareLinks: [...current.workerShareLinks.filter((item) => item.workerId !== workerId), record] };
-  if (supabase) {
-    assertWrite(await supabase.from("worker_share_links").upsert({
-      worker_id: record.workerId,
-      token: record.token,
-      active: record.active,
-      created_at: record.createdAt,
-      updated_at: record.updatedAt
-    }));
-  }
+  if (supabase) assertWrite(await supabase.from("worker_share_links").update({ active, updated_at: record.updatedAt }).eq("worker_id", workerId));
   saveLocal(next);
   return next;
 }

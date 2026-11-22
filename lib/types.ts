@@ -12,6 +12,8 @@ export type WorkerShareLink = {
   workerId: string;
   token: string;
   active: boolean;
+  issuedAt?: string;
+  firstUsedAt?: string;
   createdAt: string;
   updatedAt: string;
 };

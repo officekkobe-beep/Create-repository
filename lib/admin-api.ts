@@ -71,7 +71,21 @@ export const deleteMonthlyWorkReport = (id: string, _current: AppData) => comman
 export const upsertWorker = (worker: Partial<Worker> & Pick<Worker, "name">, _current: AppData) => command("worker.upsert", { worker });
 export const deleteWorker = (id: string, _current: AppData) => command("worker.deactivate", { id });
 export const deleteWorkerPermanently = (id: string, _current: AppData) => command("worker.deletePermanently", { id });
-export const issueWorkerShareLink = (workerId: string, _current: AppData) => command("workerShareLink.issue", { workerId });
+// 発行したリンクのURLは応答でのみ受け取る（DBにはハッシュしか残らないため、後から再表示できない）。
+export async function issueWorkerShareLink(workerId: string, _current: AppData): Promise<{ data: AppData; token: string }> {
+  const response = await fetch("/api/admin/share-links/issue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workerId })
+  });
+  if (response.status === 401) {
+    redirectToLogin();
+    throw new Error("ログインの有効期限が切れました。再度ログインしてください。");
+  }
+  const result = (await response.json().catch(() => ({}))) as ApiResult & { token?: string };
+  if (!response.ok || !result.data || !result.token) throw new Error(result.error ?? "共有リンクの発行に失敗しました。");
+  return { data: result.data, token: result.token };
+}
 export const toggleWorkerShareLink = (workerId: string, active: boolean, _current: AppData) => command("workerShareLink.toggle", { workerId, active });
 
 export const upsertClient = (client: Partial<Client> & Pick<Client, "name">, _current: AppData) => command("client.upsert", { client });

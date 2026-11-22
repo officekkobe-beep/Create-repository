@@ -133,6 +133,7 @@ export default function WorkerInputPage() {
   const [previousTotal, setPreviousTotal] = useState<number | undefined>(undefined);
   const [previousRefreshKey, setPreviousRefreshKey] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [requestId, setRequestId] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -255,6 +256,7 @@ export default function WorkerInputPage() {
     if (!sortingForm.clientId) return notify("顧問先を選択してください");
     const error = validateSorting();
     if (error) return notify(error);
+    setRequestId(crypto.randomUUID());
     setConfirmKind("sorting");
   }
 
@@ -264,7 +266,7 @@ export default function WorkerInputPage() {
       const response = await fetch(`/api/worker/${encodeURIComponent(token)}/reports`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, confirmed })
+        body: JSON.stringify({ ...payload, requestId, confirmed })
       });
       return { response, result: (await response.json().catch(() => ({}))) as SaveResult };
     };
@@ -318,6 +320,7 @@ export default function WorkerInputPage() {
     if (!monthlyForm.clientId) return notify("顧問先を選択してください");
     if (workType.unit === "count" && monthlyForm.documentCount <= 0) return notify("数量を入力してください");
     if (workType.unit === "time" && monthlyForm.workMinutes <= 0) return notify("作業時間（分）を入力してください");
+    setRequestId(crypto.randomUUID());
     setConfirmKind("monthly");
   }
 

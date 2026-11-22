@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { isSameOrigin } from "@/lib/server/admin-guard";
 import { AdminCommandError, runAdminCommand } from "@/lib/server/admin-commands";
-import { loadAdminData } from "@/lib/server/admin-data";
+import { forClient, loadAdminData } from "@/lib/server/admin-data";
 import { requireAdmin } from "@/lib/server/admin-session";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ com
 
   try {
     const data = await runAdminCommand(command, body?.args, loaded.data, { adminEmail: session.email });
-    return NextResponse.json({ ok: true, data });
+    return NextResponse.json({ ok: true, data: forClient(data) });
   } catch (error) {
     if (!(error instanceof AdminCommandError)) console.error(error);
     const message = error instanceof Error ? error.message : "処理に失敗しました。";

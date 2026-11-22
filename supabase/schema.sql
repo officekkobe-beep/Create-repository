@@ -1,4 +1,8 @@
-﻿create extension if not exists pgcrypto;
+-- 注意: このファイルは公開キー（anon）からのアクセスを遮断する設定を含む（末尾の「公開アクセスの遮断」）。
+-- 管理画面・外注者画面がサーバーAPI経由になったアプリ（PR-3以降）がデプロイされる前に実行すると、旧アプリは動かなくなる。
+-- 全行を許可するポリシーはもう作らない。再実行しても公開状態には戻らない。
+
+create extension if not exists pgcrypto;
 
 create table if not exists workers (
   id text primary key,
@@ -356,129 +360,189 @@ drop policy if exists "workers_select" on workers;
 drop policy if exists "workers_insert" on workers;
 drop policy if exists "workers_update" on workers;
 drop policy if exists "workers_delete" on workers;
-create policy "workers_select" on workers for select using (true);
-create policy "workers_insert" on workers for insert with check (true);
-create policy "workers_update" on workers for update using (true) with check (true);
-create policy "workers_delete" on workers for delete using (true);
 
 drop policy if exists "clients_select" on clients;
 drop policy if exists "clients_insert" on clients;
 drop policy if exists "clients_update" on clients;
 drop policy if exists "clients_delete" on clients;
-create policy "clients_select" on clients for select using (true);
-create policy "clients_insert" on clients for insert with check (true);
-create policy "clients_update" on clients for update using (true) with check (true);
-create policy "clients_delete" on clients for delete using (true);
 
 drop policy if exists "daily_reports_select" on daily_reports;
 drop policy if exists "daily_reports_insert" on daily_reports;
 drop policy if exists "daily_reports_update" on daily_reports;
 drop policy if exists "daily_reports_delete" on daily_reports;
-create policy "daily_reports_select" on daily_reports for select using (true);
-create policy "daily_reports_insert" on daily_reports for insert with check (true);
-create policy "daily_reports_update" on daily_reports for update using (true) with check (true);
-create policy "daily_reports_delete" on daily_reports for delete using (true);
 
 drop policy if exists "work_types_select" on work_types;
 drop policy if exists "work_types_insert" on work_types;
 drop policy if exists "work_types_update" on work_types;
 drop policy if exists "work_types_delete" on work_types;
-create policy "work_types_select" on work_types for select using (true);
-create policy "work_types_insert" on work_types for insert with check (true);
-create policy "work_types_update" on work_types for update using (true) with check (true);
-create policy "work_types_delete" on work_types for delete using (true);
 
 drop policy if exists "unit_prices_select" on unit_prices;
 drop policy if exists "unit_prices_insert" on unit_prices;
 drop policy if exists "unit_prices_update" on unit_prices;
 drop policy if exists "unit_prices_delete" on unit_prices;
-create policy "unit_prices_select" on unit_prices for select using (true);
-create policy "unit_prices_insert" on unit_prices for insert with check (true);
-create policy "unit_prices_update" on unit_prices for update using (true) with check (true);
-create policy "unit_prices_delete" on unit_prices for delete using (true);
 
 drop policy if exists "sorting_unit_prices_select" on sorting_unit_prices;
 drop policy if exists "sorting_unit_prices_insert" on sorting_unit_prices;
 drop policy if exists "sorting_unit_prices_update" on sorting_unit_prices;
 drop policy if exists "sorting_unit_prices_delete" on sorting_unit_prices;
-create policy "sorting_unit_prices_select" on sorting_unit_prices for select using (true);
-create policy "sorting_unit_prices_insert" on sorting_unit_prices for insert with check (true);
-create policy "sorting_unit_prices_update" on sorting_unit_prices for update using (true) with check (true);
-create policy "sorting_unit_prices_delete" on sorting_unit_prices for delete using (true);
 
 drop policy if exists "worker_outsource_prices_select" on worker_outsource_prices;
 drop policy if exists "worker_outsource_prices_insert" on worker_outsource_prices;
 drop policy if exists "worker_outsource_prices_update" on worker_outsource_prices;
 drop policy if exists "worker_outsource_prices_delete" on worker_outsource_prices;
-create policy "worker_outsource_prices_select" on worker_outsource_prices for select using (true);
-create policy "worker_outsource_prices_insert" on worker_outsource_prices for insert with check (true);
-create policy "worker_outsource_prices_update" on worker_outsource_prices for update using (true) with check (true);
-create policy "worker_outsource_prices_delete" on worker_outsource_prices for delete using (true);
 
 drop policy if exists "worker_work_type_outsource_prices_select" on worker_work_type_outsource_prices;
 drop policy if exists "worker_work_type_outsource_prices_insert" on worker_work_type_outsource_prices;
 drop policy if exists "worker_work_type_outsource_prices_update" on worker_work_type_outsource_prices;
 drop policy if exists "worker_work_type_outsource_prices_delete" on worker_work_type_outsource_prices;
-create policy "worker_work_type_outsource_prices_select" on worker_work_type_outsource_prices for select using (true);
-create policy "worker_work_type_outsource_prices_insert" on worker_work_type_outsource_prices for insert with check (true);
-create policy "worker_work_type_outsource_prices_update" on worker_work_type_outsource_prices for update using (true) with check (true);
-create policy "worker_work_type_outsource_prices_delete" on worker_work_type_outsource_prices for delete using (true);
 
 drop policy if exists "worker_share_links_select" on worker_share_links;
 drop policy if exists "worker_share_links_insert" on worker_share_links;
 drop policy if exists "worker_share_links_update" on worker_share_links;
 drop policy if exists "worker_share_links_delete" on worker_share_links;
-create policy "worker_share_links_select" on worker_share_links for select using (true);
-create policy "worker_share_links_insert" on worker_share_links for insert with check (true);
-create policy "worker_share_links_update" on worker_share_links for update using (true) with check (true);
-create policy "worker_share_links_delete" on worker_share_links for delete using (true);
 
 drop policy if exists "monthly_work_reports_select" on monthly_work_reports;
 drop policy if exists "monthly_work_reports_insert" on monthly_work_reports;
 drop policy if exists "monthly_work_reports_update" on monthly_work_reports;
 drop policy if exists "monthly_work_reports_delete" on monthly_work_reports;
-create policy "monthly_work_reports_select" on monthly_work_reports for select using (true);
-create policy "monthly_work_reports_insert" on monthly_work_reports for insert with check (true);
-create policy "monthly_work_reports_update" on monthly_work_reports for update using (true) with check (true);
-create policy "monthly_work_reports_delete" on monthly_work_reports for delete using (true);
 
 drop policy if exists "payment_statement_settings_select" on payment_statement_settings;
 drop policy if exists "payment_statement_settings_insert" on payment_statement_settings;
 drop policy if exists "payment_statement_settings_update" on payment_statement_settings;
 drop policy if exists "payment_statement_settings_delete" on payment_statement_settings;
-create policy "payment_statement_settings_select" on payment_statement_settings for select using (true);
-create policy "payment_statement_settings_insert" on payment_statement_settings for insert with check (true);
-create policy "payment_statement_settings_update" on payment_statement_settings for update using (true) with check (true);
-create policy "payment_statement_settings_delete" on payment_statement_settings for delete using (true);
 
 drop policy if exists "backup_records_select" on backup_records;
 drop policy if exists "backup_records_insert" on backup_records;
 drop policy if exists "backup_records_update" on backup_records;
 drop policy if exists "backup_records_delete" on backup_records;
-create policy "backup_records_select" on backup_records for select using (true);
-create policy "backup_records_insert" on backup_records for insert with check (true);
-create policy "backup_records_update" on backup_records for update using (true) with check (true);
-create policy "backup_records_delete" on backup_records for delete using (true);
 
 drop policy if exists "monthly_closings_select" on monthly_closings;
 drop policy if exists "monthly_closings_insert" on monthly_closings;
 drop policy if exists "monthly_closings_update" on monthly_closings;
 drop policy if exists "monthly_closings_delete" on monthly_closings;
-create policy "monthly_closings_select" on monthly_closings for select using (true);
-create policy "monthly_closings_insert" on monthly_closings for insert with check (true);
-create policy "monthly_closings_update" on monthly_closings for update using (true) with check (true);
-create policy "monthly_closings_delete" on monthly_closings for delete using (true);
 
 drop policy if exists "audit_logs_select" on audit_logs;
 drop policy if exists "audit_logs_insert" on audit_logs;
 drop policy if exists "audit_logs_update" on audit_logs;
 drop policy if exists "audit_logs_delete" on audit_logs;
-create policy "audit_logs_select" on audit_logs for select using (true);
-create policy "audit_logs_insert" on audit_logs for insert with check (true);
-create policy "audit_logs_update" on audit_logs for update using (true) with check (true);
-create policy "audit_logs_delete" on audit_logs for delete using (true);
 
 -- Production safety:
 -- This schema creates tables, columns, indexes, and policies only.
 -- It intentionally does not insert sample workers, clients, prices, share links,
 -- or payment settings. Create sample data from the app only when explicitly needed.
+
+-- 01: 追加のみ（切替前に実行可。現行アプリはこのまま動く）
+-- データの削除・初期化なし。再実行しても安全。
+
+-- 共有リンク: トークンはハッシュで保存し、平文は保持しない。初回利用日時で受領を確認する。
+alter table worker_share_links add column if not exists token_hash text;
+alter table worker_share_links add column if not exists issued_at timestamptz;
+alter table worker_share_links add column if not exists first_used_at timestamptz;
+alter table worker_share_links alter column token drop not null;
+create unique index if not exists worker_share_links_token_hash_key on worker_share_links(token_hash) where token_hash is not null;
+
+-- 確定月の保護をDBで強制する（作業日で判定、変更前・変更後の両方の月）。
+-- 月ごとのアドバイザリーロックで、月次確定と日報書込みを直列化し、確認と書込みの間の競合を防ぐ。
+create or replace function enforce_open_work_month() returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  months text[] := '{}';
+  target text;
+begin
+  if tg_op in ('UPDATE', 'DELETE') then
+    months := months || to_char(old.work_date, 'YYYY-MM');
+  end if;
+  if tg_op in ('INSERT', 'UPDATE') then
+    months := months || to_char(new.work_date, 'YYYY-MM');
+  end if;
+  select coalesce(array_agg(distinct m order by m), '{}') into months from unnest(months) as m;
+  foreach target in array months loop
+    perform pg_advisory_xact_lock(hashtext('work_month:' || target));
+    if exists (select 1 from monthly_closings where target_month = target and is_closed) then
+      raise exception 'この月は月次確定済みのため、作業の追加・編集・削除はできません。修正が必要な場合は、月次確定を解除してください。'
+        using errcode = 'P0001';
+    end if;
+  end loop;
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function lock_closing_month() returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('work_month:' || new.target_month));
+  return new;
+end;
+$$;
+
+drop trigger if exists daily_reports_enforce_open_month on daily_reports;
+create trigger daily_reports_enforce_open_month
+  before insert or update or delete on daily_reports
+  for each row execute function enforce_open_work_month();
+
+drop trigger if exists monthly_work_reports_enforce_open_month on monthly_work_reports;
+create trigger monthly_work_reports_enforce_open_month
+  before insert or update or delete on monthly_work_reports
+  for each row execute function enforce_open_work_month();
+
+drop trigger if exists monthly_closings_lock_month on monthly_closings;
+create trigger monthly_closings_lock_month
+  before insert or update on monthly_closings
+  for each row execute function lock_closing_month();
+
+-- 02: 公開アクセスの遮断（切替当日、新しいアプリのデプロイ後に実行）
+-- 実行後、ブラウザの公開キー（anon）からはDBを読み書きできなくなる。
+-- 旧アプリ（PR-3より前）はこの時点で動かなくなるため、必ず新アプリのデプロイ後に実行する。
+-- データの削除・初期化なし。公開権限（anon全開放）へ戻すロールバックは行わない。
+
+-- 1) 全行を許可するポリシー等、対象表のポリシーをすべて削除する。RLSは有効のまま残すので、
+--    ポリシーがない状態では anon / authenticated は1行も読み書きできない。
+do $$
+declare
+  policy record;
+begin
+  for policy in
+    select schemaname, tablename, policyname
+    from pg_policies
+    where schemaname = 'public'
+      and tablename in (
+        'workers', 'clients', 'daily_reports', 'work_types', 'unit_prices', 'sorting_unit_prices',
+        'worker_outsource_prices', 'worker_work_type_outsource_prices', 'worker_share_links',
+        'monthly_work_reports', 'payment_statement_settings', 'backup_records', 'monthly_closings', 'audit_logs'
+      )
+  loop
+    execute format('drop policy if exists %I on %I.%I', policy.policyname, policy.schemaname, policy.tablename);
+  end loop;
+end $$;
+
+alter table workers enable row level security;
+alter table clients enable row level security;
+alter table daily_reports enable row level security;
+alter table work_types enable row level security;
+alter table unit_prices enable row level security;
+alter table sorting_unit_prices enable row level security;
+alter table worker_outsource_prices enable row level security;
+alter table worker_work_type_outsource_prices enable row level security;
+alter table worker_share_links enable row level security;
+alter table monthly_work_reports enable row level security;
+alter table payment_statement_settings enable row level security;
+alter table backup_records enable row level security;
+alter table monthly_closings enable row level security;
+alter table audit_logs enable row level security;
+
+-- 2) 権限そのものを取り消す（TRUNCATE等を含む全権限）。関数・シーケンスも対象。
+revoke all on all tables in schema public from anon, authenticated;
+revoke all on all sequences in schema public from anon, authenticated;
+revoke execute on all functions in schema public from anon, authenticated, public;
+
+-- 3) 今後作るテーブル等にも自動で権限が付かないようにする（実行ユーザー postgres が作成するもの）。
+alter default privileges for role postgres in schema public revoke all on tables from anon, authenticated;
+alter default privileges for role postgres in schema public revoke all on sequences from anon, authenticated;
+alter default privileges for role postgres in schema public revoke execute on functions from anon, authenticated, public;

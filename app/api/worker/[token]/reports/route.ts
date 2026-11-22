@@ -16,11 +16,13 @@ import {
   parseMonthlyInput,
   parseSortingInput,
   previousTotalFor,
+  reportIdFor,
   validateMonthlyQuantity,
   validateSortingCounts,
   WORKER_CLOSED_MONTH_MESSAGE
 } from "@/lib/server/work-report-rules";
 import {
+  ClosedMonthError,
   findActiveClient,
   findActiveWorkType,
   findWorkerByToken,
@@ -77,9 +79,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
         if (isUnusuallyLarge(history, input.manualCount + input.smartImportCount)) warnings.push(anomalyMessage("今回作業件数"));
         if (warnings.length) return needsConfirmation(warnings);
       }
-      const record = buildSortingRecord({ id: `report-${randomUUID()}`, input, workerId: worker.id, clientClosingMonth: client.closingMonth, previousTotal, source: "worker_link", sourceWorkerId: worker.id, now });
-      await insertSortingReport(supabase, record);
-      return NextResponse.json({ ok: true, report: record });
+      const record = buildSortingRecord({ id: reportIdFor("report", body.requestId, randomUUID), input, workerId: worker.id, clientClosingMonth: client.closingMonth, previousTotal, source: "worker_link", sourceWorkerId: worker.id, now });
+      const outcome = await insertSortingReport(supabase, record);
+      return NextResponse.json({ ok: true, alreadySaved: outcome === "duplicate", report: record });
     }
 
     if (body?.kind === "monthly") {
@@ -101,13 +103,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ tok
         if (isUnusuallyLarge(history, quantity)) warnings.push(anomalyMessage(workType.unit === "count" ? "数量" : "作業時間"));
         if (warnings.length) return needsConfirmation(warnings);
       }
-      const record = buildMonthlyRecord({ id: `monthly-work-${randomUUID()}`, input, workerId: worker.id, unit: workType.unit, source: "worker_link", sourceWorkerId: worker.id, now });
-      await insertMonthlyReport(supabase, record);
-      return NextResponse.json({ ok: true, report: record });
+      const record = buildMonthlyRecord({ id: reportIdFor("monthly-work", body.requestId, randomUUID), input, workerId: worker.id, unit: workType.unit, source: "worker_link", sourceWorkerId: worker.id, now });
+      const outcome = await insertMonthlyReport(supabase, record);
+      return NextResponse.json({ ok: true, alreadySaved: outcome === "duplicate", report: record });
     }
 
     return reject(400, "作業区分を確認してください。");
   } catch (error) {
+    if (error instanceof ClosedMonthError) return reject(409, WORKER_CLOSED_MONTH_MESSAGE, { code: "closed_month" });
     console.error(error);
     return reject(500, "保存に失敗しました。時間をおいて再度お試しください。");
   }
