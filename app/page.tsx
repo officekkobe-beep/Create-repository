@@ -1823,7 +1823,7 @@ function WorkerSettings({
                       <div className="rounded-md bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">旧方式のリンクです。共有リンクを発行し直してください。</div>
                     )}
                     <div className={`mt-1 text-xs font-semibold ${link.active ? "text-blue-700" : "text-slate-500"}`}>
-                      共有リンク: {link.active ? "有効" : "無効"} ／ 受領確認: {link.firstUsedAt ? `確認済み（${new Date(link.firstUsedAt).toLocaleString("ja-JP")} 初回利用）` : "未使用"}
+                      共有リンク: {link.active ? "有効" : "無効"} ／ 初回アクセス: {link.firstUsedAt ? new Date(link.firstUsedAt).toLocaleString("ja-JP") : "未使用"}（本人への送達確認とは異なります）
                     </div>
                   </>
                 ) : (
