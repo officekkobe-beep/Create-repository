@@ -2,7 +2,8 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { monthFromDate, findPreviousReport } from "./calculations";
 import { fiscalStartMonth, fiscalYearFromDate, fiscalYearLabel, normalizeClosingMonth } from "./fiscal-year";
 import { defaultPaymentStatementSettings, sampleData } from "./sample-data";
-import type { AppData, AuditLog, BackupRecord, Client, DailyReport, MonthlyClosing, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkerWorkTypeOutsourcePrice, WorkType } from "./types";
+import { planMonthlyBilling } from "./billing";
+import type { AppData, AuditLog, BackupRecord, Client, ClientWorkTypeBillingPrice, DailyReport, MonthlyClosing, MonthlyWorkReport, MonthlyWorkReportInput, PaymentStatementSettings, ReportInput, SortingUnitPrice, UnitPrice, Worker, WorkerOutsourcePrice, WorkerShareLink, WorkerWorkTypeOutsourcePrice, WorkType } from "./types";
 
 const STORAGE_KEY = "sorting-daily-report-data";
 
@@ -63,6 +64,18 @@ function supabaseClient(): SupabaseClient | null {
   return createClient(url, anonKey);
 }
 
+// 単価機能のDB更新（supabase/migrations/20261123_client_billing_prices.sql）が本番に適用済みかどうか。
+// 未適用の間は新しい列を送らず、従来どおりの保存・計算で動く（アプリが止まらないようにするため）。
+let billingSchemaReady = false;
+
+export function isBillingSchemaReady() {
+  return billingSchemaReady;
+}
+
+export function setBillingSchemaReadyForTest(value: boolean) {
+  billingSchemaReady = value;
+}
+
 function emptyAppData(): AppData {
   return {
     workers: [],
@@ -72,6 +85,7 @@ function emptyAppData(): AppData {
     sortingUnitPrices: [],
     workerOutsourcePrices: [],
     workerWorkTypeOutsourcePrices: [],
+    clientWorkTypeBillingPrices: [],
     workerShareLinks: [],
     paymentStatementSettings: defaultPaymentStatementSettings,
     reports: [],
@@ -95,6 +109,7 @@ function normalizeData(data: Partial<AppData>): AppData {
     sortingUnitPrices: data.sortingUnitPrices ?? [],
     workerOutsourcePrices: data.workerOutsourcePrices ?? [],
     workerWorkTypeOutsourcePrices: (data.workerWorkTypeOutsourcePrices ?? []).map((item) => ({ ...item, active: item.active ?? true })),
+    clientWorkTypeBillingPrices: data.clientWorkTypeBillingPrices ?? [],
     workerShareLinks: data.workerShareLinks ?? [],
     paymentStatementSettings: { ...defaultPaymentStatementSettings, ...(data.paymentStatementSettings ?? {}) },
     reports: (data.reports ?? []).map((report) => {
@@ -196,12 +211,22 @@ export function toMonthlyWorkReport(row: Record<string, unknown>): MonthlyWorkRe
     memo: String(row.memo ?? ""),
     source: row.source === "worker_link" ? "worker_link" : "admin",
     sourceWorkerId: String(row.source_worker_id ?? ""),
+    billedUnitPrice: nullableNumber(row.billed_unit_price),
+    billedUnitQuantity: nullableNumber(row.billed_unit_quantity),
+    billedPriceSource: row.billed_price_source === "client" || row.billed_price_source === "override" || row.billed_price_source === "standard" ? row.billed_price_source : null,
+    billingOverrideReason: String(row.billing_override_reason ?? ""),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)
   };
 }
 
-export function fromMonthlyWorkReport(input: MonthlyWorkReport) {
+function nullableNumber(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+export function fromMonthlyWorkReport(input: MonthlyWorkReport, includeBilling = billingSchemaReady) {
   return {
     id: input.id,
     work_date: input.workDate,
@@ -214,6 +239,40 @@ export function fromMonthlyWorkReport(input: MonthlyWorkReport) {
     memo: input.memo,
     source: input.source,
     source_worker_id: input.sourceWorkerId,
+    ...(includeBilling
+      ? {
+          billed_unit_price: input.billedUnitPrice ?? null,
+          billed_unit_quantity: input.billedUnitQuantity ?? null,
+          billed_price_source: input.billedPriceSource ?? null,
+          billing_override_reason: input.billingOverrideReason ?? ""
+        }
+      : {}),
+    created_at: input.createdAt,
+    updated_at: input.updatedAt
+  };
+}
+
+function toClientWorkTypeBillingPrice(row: Record<string, unknown>): ClientWorkTypeBillingPrice {
+  return {
+    id: String(row.id),
+    clientId: String(row.client_id),
+    workTypeId: String(row.work_type_id),
+    unitPrice: Number(row.unit_price ?? 0),
+    unitMinutes: nullableNumber(row.unit_minutes),
+    note: String(row.note ?? ""),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+function fromClientWorkTypeBillingPrice(input: ClientWorkTypeBillingPrice) {
+  return {
+    id: input.id,
+    client_id: input.clientId,
+    work_type_id: input.workTypeId,
+    unit_price: input.unitPrice,
+    unit_minutes: input.unitMinutes,
+    note: input.note,
     created_at: input.createdAt,
     updated_at: input.updatedAt
   };
@@ -417,7 +476,7 @@ export async function createSampleData(current: AppData) {
       }))
     );
     if (missingReports.length) await supabase.from("daily_reports").upsert(missingReports.map(fromReport));
-    if (missingMonthlyReports.length) await supabase.from("monthly_work_reports").upsert(missingMonthlyReports.map(fromMonthlyWorkReport));
+    if (missingMonthlyReports.length) await supabase.from("monthly_work_reports").upsert(missingMonthlyReports.map((report) => fromMonthlyWorkReport(report)));
   }
 
   saveLocal(next);
@@ -434,7 +493,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
     };
   }
 
-  const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerWorkTypeOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult, monthlyClosingsResult, backupRecordsResult, auditLogsResult] = await Promise.all([
+  const [workersResult, clientsResult, reportsResult, workTypesResult, unitPricesResult, sortingUnitPricesResult, workerOutsourcePricesResult, workerWorkTypeOutsourcePricesResult, workerShareLinksResult, paymentStatementSettingsResult, monthlyWorkReportsResult, monthlyClosingsResult, backupRecordsResult, auditLogsResult, clientBillingPricesResult] = await Promise.all([
     supabase.from("workers").select("*").order("name"),
     supabase.from("clients").select("*").order("name"),
     supabase.from("daily_reports").select("*").order("work_date", { ascending: false }),
@@ -448,7 +507,8 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
     supabase.from("monthly_work_reports").select("*").order("work_date", { ascending: false }),
     supabase.from("monthly_closings").select("*").order("target_month", { ascending: false }),
     supabase.from("backup_records").select("*").order("backup_datetime", { ascending: false }),
-    supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(100)
+    supabase.from("audit_logs").select("*").order("created_at", { ascending: false }).limit(100),
+    supabase.from("client_work_type_billing_prices").select("*").order("client_id")
   ]);
 
   if (workersResult.error || clientsResult.error || reportsResult.error || workTypesResult.error || unitPricesResult.error || sortingUnitPricesResult.error || workerOutsourcePricesResult.error || workerShareLinksResult.error || paymentStatementSettingsResult.error || monthlyWorkReportsResult.error) {
@@ -474,6 +534,9 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
     };
   }
 
+  // 単価機能のテーブルが読めれば、DB更新は適用済みと判断する。
+  billingSchemaReady = !clientBillingPricesResult.error;
+
   return {
     mode: "supabase",
     data: normalizeData({
@@ -490,6 +553,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
         code: row.code,
         active: row.is_active ?? row.active ?? true,
         closingMonth: normalizeClosingMonth(row.closing_month),
+        billingScopeMemo: row.billing_scope_memo ?? "",
         createdAt: row.created_at
       })),
       reports: (reportsResult.data ?? []).map(toReport),
@@ -498,6 +562,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
         code: row.work_type_code ?? row.code ?? "",
         name: row.name,
         unit: row.unit_type ?? row.unit,
+        billingUnitMinutes: nullableNumber(row.billing_unit_minutes),
         active: row.is_active ?? row.active ?? true,
         createdAt: row.created_at
       })),
@@ -531,6 +596,7 @@ export async function fetchData(): Promise<{ data: AppData; mode: "supabase" | "
         updatedAt: row.updated_at
       })),
       workerWorkTypeOutsourcePrices: workerWorkTypeOutsourcePricesResult.error ? [] : (workerWorkTypeOutsourcePricesResult.data ?? []).map(toWorkerWorkTypeOutsourcePrice),
+      clientWorkTypeBillingPrices: clientBillingPricesResult.error ? [] : (clientBillingPricesResult.data ?? []).map(toClientWorkTypeBillingPrice),
       workerShareLinks: (workerShareLinksResult.data ?? []).map((row) => ({
         workerId: row.worker_id,
         token: row.token,
@@ -694,10 +760,15 @@ export async function upsertClient(client: Partial<Client> & Pick<Client, "name"
     code,
     active: client.active ?? true,
     closingMonth: normalizeClosingMonth(client.closingMonth),
+    billingScopeMemo: (client.billingScopeMemo ?? current.clients.find((item) => item.id === id)?.billingScopeMemo ?? "").trim(),
     createdAt: client.createdAt ?? nowIso()
   };
   const next = { ...current, clients: [...current.clients.filter((item) => item.id !== record.id), record] };
-  if (supabase) await supabase.from("clients").upsert({ id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, closing_month: record.closingMonth, created_at: record.createdAt });
+  if (supabase) {
+    const row: Record<string, unknown> = { id: record.id, name: record.name, code: record.code, active: record.active, is_active: record.active, closing_month: record.closingMonth, created_at: record.createdAt };
+    if (billingSchemaReady) row.billing_scope_memo = record.billingScopeMemo ?? "";
+    await supabase.from("clients").upsert(row);
+  }
   saveLocal(next);
   return next;
 }
@@ -714,8 +785,15 @@ export async function deleteClientPermanently(id: string, current: AppData) {
   const used = current.reports.some((report) => report.clientId === id) || current.monthlyWorkReports.some((report) => report.clientId === id);
   if (used) throw new Error("この顧問先は過去の作業履歴で使用されているため削除できません。無効化してください。");
   const supabase = supabaseClient();
-  const next = { ...current, clients: current.clients.filter((item) => item.id !== id) };
-  if (supabase) await supabase.from("clients").delete().eq("id", id);
+  const next = {
+    ...current,
+    clients: current.clients.filter((item) => item.id !== id),
+    clientWorkTypeBillingPrices: current.clientWorkTypeBillingPrices.filter((item) => item.clientId !== id)
+  };
+  if (supabase) {
+    if (billingSchemaReady) await supabase.from("client_work_type_billing_prices").delete().eq("client_id", id);
+    await supabase.from("clients").delete().eq("id", id);
+  }
   saveLocal(next);
   return next;
 }
@@ -731,6 +809,7 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
     code,
     name: workType.name.trim(),
     unit: workType.unit,
+    billingUnitMinutes: workType.unit === "time" ? normalizeUnitMinutes(workType.billingUnitMinutes === undefined ? existing?.billingUnitMinutes : workType.billingUnitMinutes) : null,
     active: workType.active ?? existing?.active ?? true,
     createdAt: workType.createdAt ?? existing?.createdAt ?? nowIso()
   };
@@ -759,6 +838,7 @@ export async function upsertWorkTypeWithPrice(workType: Partial<WorkType> & Pick
       name: record.name,
       unit: record.unit,
       unit_type: record.unit,
+      ...(billingSchemaReady ? { billing_unit_minutes: record.billingUnitMinutes ?? null } : {}),
       active: record.active,
       is_active: record.active,
       created_at: record.createdAt
@@ -794,9 +874,11 @@ export async function deleteWorkTypePermanently(id: string, current: AppData) {
   const next = {
     ...current,
     workTypes: current.workTypes.filter((item) => item.id !== id),
-    unitPrices: current.unitPrices.filter((item) => item.workTypeId !== id)
+    unitPrices: current.unitPrices.filter((item) => item.workTypeId !== id),
+    clientWorkTypeBillingPrices: current.clientWorkTypeBillingPrices.filter((item) => item.workTypeId !== id)
   };
   if (supabase) {
+    if (billingSchemaReady) await supabase.from("client_work_type_billing_prices").delete().eq("work_type_id", id);
     await supabase.from("unit_prices").delete().eq("work_type_id", id);
     await supabase.from("work_types").delete().eq("id", id);
   }
@@ -1085,6 +1167,14 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
     await recordBlockedClosedMonth(current, blockedMonth, CLOSED_MONTH_MESSAGE);
     throw new Error(CLOSED_MONTH_MESSAGE);
   }
+  // 売上単価を決めて日報行に記録する（DB更新が未適用の間は従来どおり記録しない）。
+  const billing = billingSchemaReady
+    ? planMonthlyBilling(
+        { clientId: input.clientId, workTypeId: input.workTypeId, overrideUnitPrice: input.billingOverrideUnitPrice, overrideReason: input.billingOverrideReason },
+        existing,
+        current
+      )
+    : null;
   const record: MonthlyWorkReport = {
     id: input.id ?? createId("monthly-work"),
     workDate: input.workDate,
@@ -1097,6 +1187,12 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
     memo: input.memo.trim(),
     source: input.source ?? existing?.source ?? "admin",
     sourceWorkerId: input.sourceWorkerId ?? existing?.sourceWorkerId ?? "",
+    ...(billing ?? {
+      billedUnitPrice: existing?.billedUnitPrice ?? null,
+      billedUnitQuantity: existing?.billedUnitQuantity ?? null,
+      billedPriceSource: existing?.billedPriceSource ?? null,
+      billingOverrideReason: existing?.billingOverrideReason ?? ""
+    }),
     createdAt: existing?.createdAt ?? nowIso(),
     updatedAt: nowIso()
   };
@@ -1104,7 +1200,26 @@ export async function upsertMonthlyWorkReport(input: Partial<MonthlyWorkReport> 
     ...current,
     monthlyWorkReports: [...current.monthlyWorkReports.filter((item) => item.id !== record.id), record].sort((a, b) => b.workDate.localeCompare(a.workDate))
   };
-  if (supabase) await supabase.from("monthly_work_reports").upsert(fromMonthlyWorkReport(record));
+  const overrideChanged =
+    record.billedPriceSource === "override" &&
+    (existing?.billedPriceSource !== "override" || existing?.billedUnitPrice !== record.billedUnitPrice || (existing?.billingOverrideReason ?? "") !== (record.billingOverrideReason ?? ""));
+  if (overrideChanged) {
+    // 今回限りの単価は、保存より先に操作履歴へ記録する（履歴を残せない場合は保存しない）。
+    next = await insertAuditLog(next, {
+      actionType: "billing_override",
+      targetType: "monthly_work_report",
+      targetId: record.id,
+      targetMonth: workMonth,
+      message: `今回限りの売上単価を${record.billedUnitPrice}円に設定しました${record.billingOverrideReason ? `（理由: ${record.billingOverrideReason}）` : ""}`,
+      beforeData: existing ?? null,
+      afterData: record,
+      createdBy: "admin"
+    });
+  }
+  if (supabase) {
+    const result = await supabase.from("monthly_work_reports").upsert(fromMonthlyWorkReport(record));
+    if (result.error) throw new Error(`作業の保存に失敗しました。もう一度お試しください。詳細: ${result.error.message}`);
+  }
   if (existing) {
     next = await recordWorkLogChange(next, {
       actionType: "update",
@@ -1137,6 +1252,83 @@ export async function deleteMonthlyWorkReport(id: string, current: AppData) {
       targetMonth: target.workMonth,
       message: "月次作業を削除しました",
       beforeData: target
+    });
+  }
+  saveLocal(next);
+  return next;
+}
+
+function normalizeUnitMinutes(value: number | null | undefined) {
+  if (value === null || value === undefined) return null;
+  const minutes = Number(value);
+  if (!Number.isInteger(minutes) || minutes <= 0) return null;
+  return minutes;
+}
+
+const BILLING_SCHEMA_NOT_READY_MESSAGE = "顧問先別単価を使うには、データベースの更新（1回だけの作業）が必要です。手順書の「データベース更新」を実施してください。";
+
+export async function upsertClientWorkTypeBillingPrice(
+  input: Pick<ClientWorkTypeBillingPrice, "clientId" | "workTypeId" | "unitPrice"> & Partial<Pick<ClientWorkTypeBillingPrice, "unitMinutes" | "note">>,
+  current: AppData
+) {
+  const supabase = supabaseClient();
+  if (supabase && !billingSchemaReady) throw new Error(BILLING_SCHEMA_NOT_READY_MESSAGE);
+  const workType = current.workTypes.find((item) => item.id === input.workTypeId);
+  if (!workType) throw new Error("作業種別を選択してください。");
+  if (!current.clients.some((item) => item.id === input.clientId)) throw new Error("顧問先を選択してください。");
+  const unitPrice = Number(input.unitPrice);
+  if (!Number.isInteger(unitPrice) || unitPrice < 0) throw new Error("単価は0円以上の整数で入力してください。");
+  const existing = current.clientWorkTypeBillingPrices.find((item) => item.clientId === input.clientId && item.workTypeId === input.workTypeId);
+  const record: ClientWorkTypeBillingPrice = {
+    id: existing?.id ?? createId("client-billing-price"),
+    clientId: input.clientId,
+    workTypeId: input.workTypeId,
+    unitPrice,
+    unitMinutes: workType.unit === "time" ? normalizeUnitMinutes(input.unitMinutes) ?? normalizeUnitMinutes(workType.billingUnitMinutes) ?? 10 : null,
+    note: (input.note ?? existing?.note ?? "").trim(),
+    createdAt: existing?.createdAt ?? nowIso(),
+    updatedAt: nowIso()
+  };
+  let next: AppData = {
+    ...current,
+    clientWorkTypeBillingPrices: [...current.clientWorkTypeBillingPrices.filter((item) => item.id !== record.id), record]
+  };
+  if (supabase) {
+    const result = await supabase.from("client_work_type_billing_prices").upsert(fromClientWorkTypeBillingPrice(record), { onConflict: "client_id,work_type_id" });
+    if (result.error) throw new Error(`顧問先別単価の保存に失敗しました。詳細: ${result.error.message}`);
+  }
+  next = await insertAuditLog(next, {
+    actionType: existing ? "update" : "create",
+    targetType: "client_billing_price",
+    targetId: record.id,
+    targetMonth: "",
+    message: "顧問先別単価を保存しました（保存済みの作業日報の金額は変わりません）",
+    beforeData: existing ?? null,
+    afterData: record,
+    createdBy: "admin"
+  });
+  saveLocal(next);
+  return next;
+}
+
+export async function deleteClientWorkTypeBillingPrice(id: string, current: AppData) {
+  const supabase = supabaseClient();
+  if (supabase && !billingSchemaReady) throw new Error(BILLING_SCHEMA_NOT_READY_MESSAGE);
+  const target = current.clientWorkTypeBillingPrices.find((item) => item.id === id);
+  let next: AppData = { ...current, clientWorkTypeBillingPrices: current.clientWorkTypeBillingPrices.filter((item) => item.id !== id) };
+  if (supabase) {
+    const result = await supabase.from("client_work_type_billing_prices").delete().eq("id", id);
+    if (result.error) throw new Error(`顧問先別単価の削除に失敗しました。詳細: ${result.error.message}`);
+  }
+  if (target) {
+    next = await insertAuditLog(next, {
+      actionType: "delete",
+      targetType: "client_billing_price",
+      targetId: id,
+      targetMonth: "",
+      message: "顧問先別単価を解除しました（以後は標準単価。保存済みの作業日報の金額は変わりません）",
+      beforeData: target,
+      createdBy: "admin"
     });
   }
   saveLocal(next);

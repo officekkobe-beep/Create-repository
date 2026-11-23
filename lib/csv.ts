@@ -1,5 +1,6 @@
-import { formatMinutes, resolveMonthlyOutsourceUnitPrice } from "./calculations";
-import type { AppData, ClientProfitabilityRow, ClientSummaryRow, DailyReport, MonthlyWorkReport, MonthlyWorkSummaryRow, SummaryRow, WorkerOutsourceSummaryRow } from "./types";
+import { calculateMonthlyWorkAmount, formatMinutes, resolveMonthlyOutsourceUnitPrice } from "./calculations";
+import { billingSourceLabel, billingUnitLabel, effectiveBillingPrice } from "./billing";
+import type { AppData, ClientProfitabilityRow, ClientSummaryRow, DailyReport, MonthlyWorkReport, MonthlyWorkSummaryRow, SummaryRow, WorkerOutsourceSummaryRow, WorkType } from "./types";
 
 function escapeCell(value: string | number) {
   const text = String(value);
@@ -138,7 +139,9 @@ export function downloadMonthlyWorkReportCsv(month: string, reports: MonthlyWork
   const workers = new Map(data.workers.map((worker) => [worker.id, worker.name]));
   const workTypes = new Map(data.workTypes.map((workType) => [workType.id, workType.name]));
   const unitPrices = new Map(data.unitPrices.map((price) => [price.workTypeId, price]));
-  const header = ["作業月", "作業日", "担当者", "顧問先", "作業種別", "書類数", "作業時間(分)", "適用外注単価", "外注単価種別", "メモ"];
+  // 既存の列の並びは変えず、売上単価の列は末尾に追加する。
+  const header = ["作業月", "作業日", "担当者", "顧問先", "作業種別", "書類数", "作業時間(分)", "適用外注単価", "外注単価種別", "メモ", "適用売上単価", "売上単価の単位", "売上単価の適用元", "売上金額", "今回限りの理由"];
+  const workTypeMap = new Map(data.workTypes.map((workType) => [workType.id, workType]));
   const lines = [
     header.map(escapeCell).join(","),
     ...reports.map((report) => {
@@ -154,7 +157,8 @@ export function downloadMonthlyWorkReportCsv(month: string, reports: MonthlyWork
         report.workMinutes,
         resolved.unitPrice,
         resolved.source === "worker" ? "担当者別単価" : "作業種別デフォルト単価",
-        report.memo
+        report.memo,
+        ...billingCsvColumns(report, data, workTypeMap.get(report.workTypeId))
       ]
         .map(escapeCell)
         .join(",");
@@ -163,8 +167,20 @@ export function downloadMonthlyWorkReportCsv(month: string, reports: MonthlyWork
   downloadCsv(`monthly_work_report_${month}.csv`, lines);
 }
 
+function billingCsvColumns(report: MonthlyWorkReport, data: AppData, workType: WorkType | undefined): (string | number)[] {
+  const billing = effectiveBillingPrice(report, data);
+  if (!billing || !workType) return ["", "", "", 0, ""];
+  return [
+    billing.unitPrice,
+    billingUnitLabel(workType.unit, billing.unitQuantity),
+    billingSourceLabel(billing.source),
+    calculateMonthlyWorkAmount(report, data),
+    billing.source === "override" ? report.billingOverrideReason ?? "" : ""
+  ];
+}
+
 export function downloadMonthlyWorkSummaryCsv(month: string, rows: MonthlyWorkSummaryRow[]) {
-  const header = ["作業月", "顧問先", "作業種別", "書類数合計", "作業時間合計", "売上単価", "原価単価", "単位", "売上", "原価", "粗利", "粗利率"];
+  const header = ["作業月", "顧問先", "作業種別", "書類数合計", "作業時間合計", "売上単価", "原価単価", "単位", "売上", "原価", "粗利", "粗利率", "売上単価の適用元"];
   const lines = [
     header.map(escapeCell).join(","),
     ...rows.map((row) =>
@@ -180,7 +196,8 @@ export function downloadMonthlyWorkSummaryCsv(month: string, rows: MonthlyWorkSu
         row.revenue,
         row.cost,
         row.grossProfit,
-        grossRate(row.revenue, row.grossProfit)
+        grossRate(row.revenue, row.grossProfit),
+        billingSourceLabel(row.priceSource)
       ]
         .map(escapeCell)
         .join(",")

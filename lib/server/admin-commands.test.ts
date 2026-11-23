@@ -31,6 +31,7 @@ function data(overrides: Partial<AppData> = {}): AppData {
     sortingUnitPrices: [],
     workerOutsourcePrices: [],
     workerWorkTypeOutsourcePrices: [],
+    clientWorkTypeBillingPrices: [],
     workerShareLinks: [],
     paymentStatementSettings: {
       title: "", issuerName: "", issuerAddress: "", issuerPhone: "", issuerEmail: "", registrationNumber: "",
